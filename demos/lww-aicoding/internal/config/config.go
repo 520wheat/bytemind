@@ -31,7 +31,7 @@ func Default(workspace string) Config {
 		Provider: ProviderConfig{
 			Type:             "openai-compatible",
 			BaseURL:          "https://api.openai.com/v1",
-			Model:            "gpt-4", 
+			Model:            "GPT-5.4", 
 			APIKeyEnv:        "AICODING_API_KEY",
 			AnthropicVersion: "2023-06-01",
 		},

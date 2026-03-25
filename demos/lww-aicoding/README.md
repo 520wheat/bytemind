@@ -22,7 +22,7 @@
 
 ```text
 cmd/aicoding            CLI 入口
-internal/agent          对话循环、系统提示词、流式输出
+internal/agent          对话循环、系统提示词模板、流式输出
 internal/config         配置加载与环境变量覆盖
 internal/llm            通用消息与工具类型
 internal/provider       多 provider 适配层
@@ -161,6 +161,14 @@ Anthropic 示例：
 - `apply_patch`
 - `update_plan`
 - `run_shell`
+
+## 系统提示词维护
+
+系统提示词已抽离为独立模板文档维护：
+
+- `internal/agent/prompts/system.md`
+
+运行时由 `internal/agent/prompt.go` 通过 `go:embed` 内嵌 Markdown 文档，并替换 `{{WORKSPACE}}`、`{{APPROVAL_POLICY}}` 占位符，因此修改提示词时不需要再直接编辑 Go 字符串常量。
 
 ## apply_patch 改进
 
