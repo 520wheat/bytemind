@@ -86,19 +86,11 @@ type sessionsLoadedMsg struct {
 var commandItems = []commandItem{
 	{Name: "/help", Usage: "/help", Description: "打开帮助面板，查看当前可用命令和基础用法。", Kind: "command"},
 	{Name: "session", Usage: "session ▸", Description: "查看当前会话、历史会话和恢复会话。", Group: "session", Kind: "group"},
-	{Name: "plan", Usage: "plan ▸", Description: "查看和编辑当前计划。", Group: "plan", Kind: "group"},
 	{Name: "/new", Usage: "/new", Description: "在当前工作区创建一个全新的持久会话。", Kind: "command"},
 	{Name: "/quit", Usage: "/quit", Description: "退出当前 TUI 界面。", Kind: "command"},
 	{Name: "/session", Usage: "/session", Description: "查看当前会话 ID、工作区路径和最近更新时间。", Group: "session", Kind: "command"},
 	{Name: "/sessions", Usage: "/sessions [limit]", Description: "列出最近的历史会话，方便恢复之前的上下文。", Group: "session", Kind: "command"},
 	{Name: "/resume", Usage: "/resume <id>", Description: "按完整 ID 或前缀恢复一个已有会话。", Group: "session", Kind: "command"},
-	{Name: "/plan", Usage: "/plan", Description: "查看当前会话里保存的任务计划。", Group: "plan", Kind: "command"},
-	{Name: "/plan create", Usage: "/plan create step one | step two | step three", Description: "按你给出的步骤创建一份新的多步骤计划。", Group: "plan", Kind: "command"},
-	{Name: "/plan add", Usage: "/plan add <step>", Description: "给当前计划继续追加一个步骤。", Group: "plan", Kind: "command"},
-	{Name: "/plan start", Usage: "/plan start <index>", Description: "把指定步骤标记为进行中。", Group: "plan", Kind: "command"},
-	{Name: "/plan done", Usage: "/plan done <index>", Description: "把指定步骤标记为已完成。", Group: "plan", Kind: "command"},
-	{Name: "/plan pending", Usage: "/plan pending <index>", Description: "把指定步骤重新标记为待处理。", Group: "plan", Kind: "command"},
-	{Name: "/plan clear", Usage: "/plan clear", Description: "清空当前会话中的任务计划。", Group: "plan", Kind: "command"},
 }
 
 type model struct {
@@ -887,84 +879,9 @@ func (m *model) handleSlashCommand(input string) error {
 		return m.resumeSession(fields[1])
 	case "/new":
 		return m.newSession()
-	case "/plan":
-		return m.handlePlanCommand(input)
 	default:
 		return fmt.Errorf("unknown command: %s", fields[0])
 	}
-}
-
-func (m *model) handlePlanCommand(input string) error {
-	fields := strings.Fields(input)
-	if len(fields) == 1 {
-		m.screen = screenChat
-		m.appendChat(chatEntry{Kind: "user", Title: "You", Body: input, Status: "final"})
-		m.appendChat(chatEntry{Kind: "assistant", Title: "AICoding", Body: m.planText(), Status: "final"})
-		if len(m.plan) == 0 {
-			m.statusNote = "No active plan."
-		} else {
-			m.statusNote = fmt.Sprintf("Plan has %d step(s).", len(m.plan))
-		}
-		return nil
-	}
-
-	switch fields[1] {
-	case "clear":
-		m.plan = nil
-		m.sess.Plan = nil
-		m.statusNote = "Plan cleared."
-	case "add":
-		step := strings.TrimSpace(strings.TrimPrefix(input, "/plan add"))
-		if step == "" {
-			return fmt.Errorf("usage: /plan add <step>")
-		}
-		status := "pending"
-		if !hasInProgress(m.plan) {
-			status = "in_progress"
-		}
-		m.plan = append(m.plan, session.PlanItem{Step: step, Status: status})
-		m.sess.Plan = copyPlan(m.plan)
-		m.statusNote = "Plan step added."
-	case "start", "done", "pending":
-		if len(fields) < 3 {
-			return fmt.Errorf("/plan %s <index>", fields[1])
-		}
-		index, err := strconv.Atoi(fields[2])
-		if err != nil || index <= 0 || index > len(m.plan) {
-			return fmt.Errorf("plan step index must be between 1 and %d", len(m.plan))
-		}
-		status := map[string]string{"start": "in_progress", "done": "completed", "pending": "pending"}[fields[1]]
-		for i := range m.plan {
-			if status == "in_progress" && i != index-1 && m.plan[i].Status == "in_progress" {
-				m.plan[i].Status = "pending"
-			}
-		}
-		m.plan[index-1].Status = status
-		m.sess.Plan = copyPlan(m.plan)
-		m.statusNote = "Plan updated."
-	case "create":
-		raw := strings.TrimSpace(strings.TrimPrefix(input, "/plan create"))
-		steps := parsePlanSteps(raw)
-		if len(steps) == 0 {
-			return fmt.Errorf("usage: /plan create step one | step two | step three")
-		}
-		if len(steps) == 1 {
-			steps = autoPlan(steps[0])
-		}
-		m.plan = makePlan(steps)
-		m.sess.Plan = copyPlan(m.plan)
-		m.statusNote = fmt.Sprintf("Plan created with %d step(s).", len(m.plan))
-	default:
-		raw := strings.TrimSpace(strings.TrimPrefix(input, "/plan"))
-		if raw == "" {
-			return nil
-		}
-		m.plan = makePlan(autoPlan(raw))
-		m.sess.Plan = copyPlan(m.plan)
-		m.statusNote = fmt.Sprintf("Plan created with %d step(s).", len(m.plan))
-	}
-
-	return m.store.Save(m.sess)
 }
 
 func (m *model) newSession() error {
@@ -1529,13 +1446,6 @@ func (m model) helpText() string {
 		"/sessions [limit]: 查看最近的历史会话列表。",
 		"/resume <id>: 按完整 ID 或前缀恢复一个会话。",
 		"/new: 新建一个会话。",
-		"/plan: 查看当前计划。",
-		"/plan create step one | step two | step three: 创建新计划。",
-		"/plan add <step>: 追加一个计划步骤。",
-		"/plan start <index>: 将步骤标记为进行中。",
-		"/plan done <index>: 将步骤标记为已完成。",
-		"/plan pending <index>: 将步骤重新标记为待处理。",
-		"/plan clear: 清空当前计划。",
 		"/quit: 退出 TUI。",
 		"",
 		"当前界面",
@@ -1564,8 +1474,6 @@ func visibleCommandItems(group string) []commandItem {
 
 func inferCommandGroup(value string) string {
 	switch {
-	case strings.HasPrefix(value, "/plan"):
-		return "plan"
 	case strings.HasPrefix(value, "/session"),
 		strings.HasPrefix(value, "/sessions"),
 		strings.HasPrefix(value, "/resume"):
@@ -1689,40 +1597,6 @@ func parsePlanSteps(raw string) []string {
 	return steps
 }
 
-func makePlan(steps []string) []session.PlanItem {
-	plan := make([]session.PlanItem, 0, len(steps))
-	for i, step := range steps {
-		status := "pending"
-		if i == 0 {
-			status = "in_progress"
-		}
-		plan = append(plan, session.PlanItem{Step: step, Status: status})
-	}
-	return plan
-}
-
-func autoPlan(goal string) []string {
-	goal = strings.TrimSpace(goal)
-	if goal == "" {
-		return []string{"Clarify the goal and constraints", "Implement the core change", "Verify the result and summarize"}
-	}
-	return []string{
-		"Inspect the relevant code paths for " + goal,
-		"Design the minimal change set and UI flow",
-		"Implement the core behavior for " + goal,
-		"Verify the outcome and note follow-up improvements",
-	}
-}
-
-func hasInProgress(plan []session.PlanItem) bool {
-	for _, item := range plan {
-		if item.Status == "in_progress" {
-			return true
-		}
-	}
-	return false
-}
-
 func copyPlan(plan []session.PlanItem) []session.PlanItem {
 	if len(plan) == 0 {
 		return nil
@@ -1742,17 +1616,6 @@ func (m model) sessionText() string {
 		fmt.Sprintf("Updated: %s", m.sess.UpdatedAt.Local().Format("2006-01-02 15:04:05")),
 		fmt.Sprintf("Messages: %d", len(m.sess.Messages)),
 	}, "\n")
-}
-
-func (m model) planText() string {
-	if len(m.plan) == 0 {
-		return "No active plan."
-	}
-	lines := []string{fmt.Sprintf("Current plan (%d step(s)):", len(m.plan))}
-	for i, item := range m.plan {
-		lines = append(lines, fmt.Sprintf("%d. [%s] %s", i+1, item.Status, item.Step))
-	}
-	return strings.Join(lines, "\n")
 }
 
 func statusGlyph(status string) string {

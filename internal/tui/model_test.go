@@ -23,7 +23,10 @@ func TestHandleMouseScrollsViewport(t *testing.T) {
 		}(),
 	}
 
-	got, _ := m.handleMouse(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	got, _ := m.handleMouse(tea.MouseMsg{
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	})
 	updated := got.(model)
 	if updated.viewport.YOffset == 0 {
 		t.Fatalf("expected viewport to scroll down, got offset %d", updated.viewport.YOffset)
@@ -37,7 +40,7 @@ func TestHelpTextOnlyMentionsSupportedEntryPoints(t *testing.T) {
 		"scripts\\install.ps1",
 		"aicoding chat",
 		"aicoding run",
-		"当前版本还没实现",
+		"/plan",
 	} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("help text should not mention %q", unwanted)
@@ -48,6 +51,10 @@ func TestHelpTextOnlyMentionsSupportedEntryPoints(t *testing.T) {
 		"go run ./cmd/bytemind chat",
 		"go run ./cmd/bytemind run -prompt",
 		"/quit",
+		"/session",
+		"/sessions [limit]",
+		"/resume <id>",
+		"/new",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("help text should mention %q", wanted)
@@ -92,6 +99,14 @@ func TestCommandPaletteDoesNotListExitAlias(t *testing.T) {
 	}
 }
 
+func TestCommandPaletteDoesNotListPlanCommands(t *testing.T) {
+	for _, item := range commandItems {
+		if strings.HasPrefix(item.Name, "/plan") || item.Group == "plan" {
+			t.Fatalf("did not expect command palette to include plan item %+v", item)
+		}
+	}
+}
+
 func TestFilteredCommandsShowsRootSelectorGroups(t *testing.T) {
 	input := textarea.New()
 	input.SetValue("/")
@@ -103,24 +118,24 @@ func TestFilteredCommandsShowsRootSelectorGroups(t *testing.T) {
 		usages = append(usages, item.Usage)
 	}
 
-	for _, want := range []string{"/help", "session ▸", "plan ▸", "/new", "/quit"} {
+	for _, want := range []string{"/help", "session ▸", "/new", "/quit"} {
 		if !containsString(usages, want) {
 			t.Fatalf("expected root selector to contain %q, got %v", want, usages)
 		}
 	}
-	for _, unwanted := range []string{"/plan add <step>", "/sessions [limit]"} {
+	for _, unwanted := range []string{"plan ▸", "/plan", "/plan add <step>", "/sessions [limit]"} {
 		if containsString(usages, unwanted) {
 			t.Fatalf("did not expect root selector to contain %q", unwanted)
 		}
 	}
 }
 
-func TestFilteredCommandsShowsPlanChildrenOnly(t *testing.T) {
+func TestFilteredCommandsShowsSessionChildrenOnly(t *testing.T) {
 	input := textarea.New()
 	input.SetValue("/")
 	m := model{
 		input:        input,
-		commandGroup: "plan",
+		commandGroup: "session",
 	}
 
 	items := m.filteredCommands()
@@ -129,14 +144,14 @@ func TestFilteredCommandsShowsPlanChildrenOnly(t *testing.T) {
 		usages = append(usages, item.Usage)
 	}
 
-	for _, want := range []string{"/plan", "/plan add <step>", "/plan clear"} {
+	for _, want := range []string{"/session", "/sessions [limit]", "/resume <id>"} {
 		if !containsString(usages, want) {
-			t.Fatalf("expected plan selector to contain %q, got %v", want, usages)
+			t.Fatalf("expected session selector to contain %q, got %v", want, usages)
 		}
 	}
-	for _, unwanted := range []string{"/session", "/sessions [limit]", "session ▸"} {
+	for _, unwanted := range []string{"/plan", "/plan add <step>", "session ▸"} {
 		if containsString(usages, unwanted) {
-			t.Fatalf("did not expect plan selector to contain %q", unwanted)
+			t.Fatalf("did not expect session selector to contain %q", unwanted)
 		}
 	}
 }
@@ -147,7 +162,7 @@ func TestCommandPaletteEscReturnsToRootSelector(t *testing.T) {
 	m := model{
 		input:        input,
 		commandOpen:  true,
-		commandGroup: "plan",
+		commandGroup: "session",
 	}
 
 	got, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
@@ -170,42 +185,6 @@ func TestSessionTextShowsSessionDetails(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected session text to contain %q", want)
 		}
-	}
-}
-
-func TestPlanTextShowsSavedPlanItems(t *testing.T) {
-	m := model{
-		plan: []session.PlanItem{
-			{Step: "Inspect current TUI behavior", Status: "completed"},
-			{Step: "Align visible features with code", Status: "in_progress"},
-		},
-	}
-
-	text := m.planText()
-	for _, want := range []string{
-		"Current plan (2 step(s)):",
-		"1. [completed] Inspect current TUI behavior",
-		"2. [in_progress] Align visible features with code",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("expected plan text to contain %q", want)
-		}
-	}
-}
-
-func TestHelpTextDoesNotMentionSidebar(t *testing.T) {
-	text := model{}.helpText()
-	if strings.Contains(text, "右侧状态栏") {
-		t.Fatalf("help text should not mention sidebar")
-	}
-	if !strings.Contains(text, "主界面只显示用户消息和助手回复") {
-		t.Fatalf("help text should describe the actual single-panel chat layout")
-	}
-	if strings.Contains(text, "/exit") {
-		t.Fatalf("help text should not mention /exit")
-	}
-	if !strings.Contains(text, "/quit: 退出 TUI。") {
-		t.Fatalf("help text should mention /quit as the only exit command")
 	}
 }
 
@@ -235,16 +214,16 @@ func TestApprovalBannerRendersAboveInput(t *testing.T) {
 
 	footer := m.renderFooter()
 	for _, want := range []string{
-		"需要你的确认",
-		"原因: run tests",
 		"go test ./internal/tui",
-		"Y / Enter 同意    N / Esc 拒绝",
+		"run tests",
+		"Y / Enter",
+		"N / Esc",
 	} {
 		if !strings.Contains(footer, want) {
 			t.Fatalf("expected approval banner to contain %q", want)
 		}
 	}
-	if strings.Contains(footer, "审批请求") {
+	if strings.Contains(footer, "Approval Request") {
 		t.Fatalf("did not expect old centered approval modal title in footer")
 	}
 }
@@ -252,11 +231,11 @@ func TestApprovalBannerRendersAboveInput(t *testing.T) {
 func TestFormatChatBodyPreservesExplicitBlankLines(t *testing.T) {
 	item := chatEntry{
 		Kind: "assistant",
-		Body: "第一段\n\n第二段",
+		Body: "first paragraph\n\nsecond paragraph",
 	}
 
 	got := formatChatBody(item, 80)
-	if !strings.Contains(got, "\n\n第二段") {
+	if !strings.Contains(got, "first paragraph\n\nsecond paragraph") {
 		t.Fatalf("expected explicit blank line to be preserved, got %q", got)
 	}
 }
@@ -264,11 +243,11 @@ func TestFormatChatBodyPreservesExplicitBlankLines(t *testing.T) {
 func TestFormatChatBodySeparatesParagraphAndList(t *testing.T) {
 	item := chatEntry{
 		Kind: "assistant",
-		Body: "这里是说明\n- 第一项\n- 第二项",
+		Body: "Explanation\n- first\n- second",
 	}
 
 	got := formatChatBody(item, 80)
-	if !strings.Contains(got, "这里是说明\n\n- 第一项") {
+	if !strings.Contains(got, "Explanation\n\n- first") {
 		t.Fatalf("expected list to be separated from paragraph, got %q", got)
 	}
 }
@@ -276,14 +255,14 @@ func TestFormatChatBodySeparatesParagraphAndList(t *testing.T) {
 func TestFormatChatBodyRendersMarkdownHeadingWithoutHashes(t *testing.T) {
 	item := chatEntry{
 		Kind: "assistant",
-		Body: "# 一级标题\n正文",
+		Body: "# Heading\nBody",
 	}
 
 	got := formatChatBody(item, 80)
-	if strings.Contains(got, "# 一级标题") {
+	if strings.Contains(got, "# Heading") {
 		t.Fatalf("expected heading marker to be stripped, got %q", got)
 	}
-	if !strings.Contains(got, "一级标题") {
+	if !strings.Contains(got, "Heading") {
 		t.Fatalf("expected heading text to remain, got %q", got)
 	}
 }
@@ -309,14 +288,14 @@ func TestFinishAssistantMessageDoesNotAppendDuplicateCard(t *testing.T) {
 			{
 				Kind:   "assistant",
 				Title:  "AICoding",
-				Body:   "同一条回复",
+				Body:   "same answer",
 				Status: "streaming",
 			},
 		},
 		streamingIndex: -1,
 	}
 
-	m.finishAssistantMessage("同一条回复")
+	m.finishAssistantMessage("same answer")
 
 	if len(m.chatItems) != 1 {
 		t.Fatalf("expected no duplicate assistant card, got %d items", len(m.chatItems))
