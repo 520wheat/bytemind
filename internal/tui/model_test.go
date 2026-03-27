@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestHandleMouseScrollsViewport(t *testing.T) {
@@ -138,5 +139,36 @@ func TestHelpTextDoesNotMentionSidebar(t *testing.T) {
 	}
 	if !strings.Contains(text, "/quit: 退出 TUI。") {
 		t.Fatalf("help text should mention /quit as the only exit command")
+	}
+}
+
+func TestAssistantChatBubbleUsesFullAvailableWidth(t *testing.T) {
+	width := 80
+	assistantWidth := chatBubbleWidth(chatEntry{Kind: "assistant"}, width)
+	if assistantWidth != width {
+		t.Fatalf("expected assistant bubble width %d, got %d", width, assistantWidth)
+	}
+
+	userWidth := chatBubbleWidth(chatEntry{Kind: "user"}, width)
+	if userWidth >= width {
+		t.Fatalf("expected user bubble to stay narrower than the full width, got %d", userWidth)
+	}
+}
+
+func TestApprovalModalUsesCompactWidth(t *testing.T) {
+	m := model{
+		width: 120,
+		approval: &approvalPrompt{
+			Command: "go test ./internal/tui",
+			Reason:  "run tests",
+		},
+	}
+
+	modal := m.renderApprovalModal()
+	if got := lipgloss.Width(modal); got > 72 {
+		t.Fatalf("expected compact approval modal width, got %d", got)
+	}
+	if !strings.Contains(modal, "审批请求") {
+		t.Fatalf("expected localized approval title")
 	}
 }

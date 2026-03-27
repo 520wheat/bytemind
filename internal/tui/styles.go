@@ -3,32 +3,30 @@ package tui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	colorPanel   = lipgloss.Color("#111827")
-	colorBorder  = lipgloss.Color("#243244")
-	colorAccent  = lipgloss.Color("#5EEAD4")
-	colorUser    = lipgloss.Color("#FDBA74")
-	colorTool    = lipgloss.Color("#FDE68A")
-	colorMuted   = lipgloss.Color("#94A3B8")
-	colorDanger  = lipgloss.Color("#FCA5A5")
-	colorSuccess = lipgloss.Color("#86EFAC")
+	colorPanel   = lipgloss.Color("#0F1720")
+	colorBorder  = lipgloss.Color("#314156")
+	colorAccent  = lipgloss.Color("#7DD3FC")
+	colorUser    = lipgloss.Color("#F6AD7B")
+	colorTool    = lipgloss.Color("#F9D67A")
+	colorMuted   = lipgloss.Color("#93A4B8")
+	colorDanger  = lipgloss.Color("#F7A8A8")
+	colorSuccess = lipgloss.Color("#8EE6A0")
 )
 
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#E2E8F0")).
-			Background(lipgloss.Color("#0B1220")).
-			Padding(0, 1)
+			Foreground(lipgloss.Color("#E5EEF8"))
 
 	tagStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#D1FAE5")).
-			Background(lipgloss.Color("#12313A")).
+			Foreground(lipgloss.Color("#D6E4F5")).
+			Background(lipgloss.Color("#172434")).
 			Padding(0, 1).
 			MarginLeft(1)
 
 	statusTagStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FEF3C7")).
-			Background(lipgloss.Color("#3B2F17")).
+			Foreground(lipgloss.Color("#E6F7FF")).
+			Background(lipgloss.Color("#15303B")).
 			Padding(0, 1).
 			MarginLeft(1)
 
@@ -44,7 +42,7 @@ var (
 
 	panelStyle = lipgloss.NewStyle().
 			Background(colorPanel).
-			BorderStyle(lipgloss.RoundedBorder()).
+			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(colorBorder).
 			Padding(0, 1)
 
@@ -57,18 +55,17 @@ var (
 				Bold(true)
 
 	landingInputStyle = lipgloss.NewStyle().
-				BorderStyle(lipgloss.RoundedBorder()).
+				BorderStyle(lipgloss.NormalBorder()).
 				BorderForeground(colorAccent).
 				Padding(0, 1).
 				Background(colorPanel)
 
 	sectionTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("#E2E8F0")).
-				Underline(true)
+				Foreground(lipgloss.Color("#E2E8F0"))
 
 	inputStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
+			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(colorBorder).
 			Padding(0, 1).
 			Background(colorPanel)
@@ -88,19 +85,19 @@ var (
 				BorderLeft(true).
 				BorderForeground(colorAccent).
 				Padding(0, 1).
-				Background(lipgloss.Color("#10222A"))
+				Background(lipgloss.Color("#111C27"))
 
 	chatUserStyle = lipgloss.NewStyle().
 			BorderLeft(true).
 			BorderForeground(colorUser).
 			Padding(0, 1).
-			Background(lipgloss.Color("#2B1E15"))
+			Background(lipgloss.Color("#241B16"))
 
 	chatToolStyle = lipgloss.NewStyle().
 			BorderLeft(true).
 			BorderForeground(colorTool).
 			Padding(0, 1).
-			Background(lipgloss.Color("#2C2815"))
+			Background(lipgloss.Color("#272317"))
 
 	chatSystemStyle = lipgloss.NewStyle().
 			BorderLeft(true).
@@ -110,9 +107,9 @@ var (
 
 	modalBoxStyle = lipgloss.NewStyle().
 			Background(colorPanel).
-			BorderStyle(lipgloss.DoubleBorder()).
+			BorderStyle(lipgloss.NormalBorder()).
 			BorderForeground(colorAccent).
-			Padding(1, 2)
+			Padding(0, 1)
 
 	modalTitleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -121,7 +118,7 @@ var (
 	codeStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#F8FAFC")).
 			Background(lipgloss.Color("#0B1220")).
-			Padding(1, 1)
+			Padding(0, 1)
 
 	mutedStyle  = lipgloss.NewStyle().Foreground(colorMuted)
 	accentStyle = lipgloss.NewStyle().Foreground(colorAccent)

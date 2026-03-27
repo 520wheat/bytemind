@@ -781,16 +781,20 @@ func (m model) renderHelpModal() string {
 }
 
 func (m model) renderApprovalModal() string {
+	modalWidth := approvalModalWidth(m.width)
+	commandWidth := approvalCommandWidth(modalWidth)
 	lines := []string{
-		modalTitleStyle.Render("Approve Shell Command"),
+		modalTitleStyle.Render("审批请求"),
 		"",
-		"Reason: " + m.approval.Reason,
+		mutedStyle.Render("需要确认后才能继续执行以下命令。"),
 		"",
-		codeStyle.Width(min(88, max(44, m.width-20))).Render(m.approval.Command),
+		"原因: " + m.approval.Reason,
 		"",
-		mutedStyle.Render("Press Y or Enter to approve, N or Esc to reject."),
+		codeStyle.Width(commandWidth).Render(m.approval.Command),
+		"",
+		mutedStyle.Render("Y / Enter 同意    N / Esc 拒绝"),
 	}
-	return modalBoxStyle.Width(min(96, max(56, m.width-16))).Render(strings.Join(lines, "\n"))
+	return modalBoxStyle.Width(modalWidth).Render(strings.Join(lines, "\n"))
 }
 
 func (m model) renderCommandPalette() string {
@@ -1051,13 +1055,7 @@ func renderChatCard(item chatEntry, width int) string {
 }
 
 func renderChatRow(item chatEntry, width int) string {
-	bubbleWidth := width * 3 / 4
-	if bubbleWidth < 28 {
-		bubbleWidth = width
-	}
-	if bubbleWidth > width {
-		bubbleWidth = width
-	}
+	bubbleWidth := chatBubbleWidth(item, width)
 	card := renderChatCard(item, bubbleWidth-2)
 	align := lipgloss.Left
 	if item.Kind == "user" {
@@ -1071,6 +1069,35 @@ func renderModal(width, height int, modal string) string {
 		return modal
 	}
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+func chatBubbleWidth(item chatEntry, width int) int {
+	if width <= 28 {
+		return width
+	}
+
+	bubbleWidth := width
+	if item.Kind == "user" {
+		bubbleWidth = width * 5 / 6
+		if bubbleWidth < 36 {
+			bubbleWidth = width
+		}
+	}
+	if bubbleWidth > width {
+		bubbleWidth = width
+	}
+	if bubbleWidth < 28 {
+		return width
+	}
+	return bubbleWidth
+}
+
+func approvalModalWidth(screenWidth int) int {
+	return min(68, max(36, screenWidth-28))
+}
+
+func approvalCommandWidth(modalWidth int) int {
+	return max(24, modalWidth-modalBoxStyle.GetHorizontalFrameSize()-2)
 }
 
 func summarizeTool(name, payload string) (string, []string, string) {
