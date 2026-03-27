@@ -180,3 +180,27 @@ func TestApprovalBannerRendersAboveInput(t *testing.T) {
 		t.Fatalf("did not expect old centered approval modal title in footer")
 	}
 }
+
+func TestFormatChatBodyPreservesExplicitBlankLines(t *testing.T) {
+	item := chatEntry{
+		Kind: "assistant",
+		Body: "第一段\n\n第二段",
+	}
+
+	got := formatChatBody(item)
+	if !strings.Contains(got, "\n\n第二段") {
+		t.Fatalf("expected explicit blank line to be preserved, got %q", got)
+	}
+}
+
+func TestFormatChatBodySeparatesParagraphAndList(t *testing.T) {
+	item := chatEntry{
+		Kind: "assistant",
+		Body: "这里是说明\n- 第一项\n- 第二项",
+	}
+
+	got := formatChatBody(item)
+	if !strings.Contains(got, "这里是说明\n\n- 第一项") {
+		t.Fatalf("expected list to be separated from paragraph, got %q", got)
+	}
+}

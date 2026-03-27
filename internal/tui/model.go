@@ -1044,7 +1044,7 @@ func renderChatCard(item chatEntry, width int) string {
 		border = chatSystemStyle
 	}
 	head := lipgloss.JoinHorizontal(lipgloss.Left, title.Render(item.Title), mutedStyle.Render("  "+item.Status))
-	body := lipgloss.NewStyle().Width(width).Render(item.Body)
+	body := lipgloss.NewStyle().Width(width).Render(formatChatBody(item))
 	return border.Width(width + 2).Render(lipgloss.JoinVertical(lipgloss.Left, head, body))
 }
 
@@ -1063,6 +1063,72 @@ func renderModal(width, height int, modal string) string {
 		return modal
 	}
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, modal)
+}
+
+func formatChatBody(item chatEntry) string {
+	text := strings.ReplaceAll(item.Body, "\r\n", "\n")
+	if item.Kind != "assistant" {
+		return strings.TrimRight(text, "\n")
+	}
+	return strings.TrimRight(tidyAssistantSpacing(text), "\n")
+}
+
+func tidyAssistantSpacing(text string) string {
+	lines := strings.Split(text, "\n")
+	out := make([]string, 0, len(lines)+4)
+	inCodeBlock := false
+	prevBlank := true
+
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, " \t")
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "```") {
+			if !prevBlank && len(out) > 0 {
+				out = append(out, "")
+			}
+			out = append(out, line)
+			inCodeBlock = !inCodeBlock
+			prevBlank = false
+			continue
+		}
+
+		if inCodeBlock {
+			out = append(out, line)
+			prevBlank = trimmed == ""
+			continue
+		}
+
+		if trimmed == "" {
+			if !prevBlank && len(out) > 0 {
+				out = append(out, "")
+			}
+			prevBlank = true
+			continue
+		}
+
+		if needsLeadingBlankLine(trimmed) && !prevBlank && len(out) > 0 {
+			out = append(out, "")
+		}
+
+		out = append(out, line)
+		prevBlank = false
+	}
+
+	return strings.Join(out, "\n")
+}
+
+func needsLeadingBlankLine(line string) bool {
+	if strings.HasPrefix(line, "#") {
+		return true
+	}
+	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "> ") {
+		return true
+	}
+	if len(line) >= 3 && line[1] == '.' && line[2] == ' ' && line[0] >= '0' && line[0] <= '9' {
+		return true
+	}
+	return false
 }
 
 func chatBubbleWidth(item chatEntry, width int) int {
