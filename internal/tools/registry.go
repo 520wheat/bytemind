@@ -14,6 +14,7 @@ import (
 type ExecutionContext struct {
 	Workspace      string
 	ApprovalPolicy string
+	Approval       ApprovalHandler
 	Session        *session.Session
 	Stdin          io.Reader
 	Stdout         io.Writer
@@ -36,6 +37,7 @@ func DefaultRegistry() *Registry {
 	r.Add(WriteFileTool{})
 	r.Add(ReplaceInFileTool{})
 	r.Add(ApplyPatchTool{})
+	r.Add(UpdatePlanTool{})
 	r.Add(RunShellTool{})
 	return r
 }

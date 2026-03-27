@@ -15,12 +15,18 @@ import (
 	"bytemind/internal/llm"
 )
 
+type PlanItem struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+}
+
 type Session struct {
 	ID        string        `json:"id"`
 	Workspace string        `json:"workspace"`
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
 	Messages  []llm.Message `json:"messages"`
+	Plan      []PlanItem    `json:"plan,omitempty"`
 }
 
 type Store struct {
@@ -44,6 +50,7 @@ func New(workspace string) *Session {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Messages:  make([]llm.Message, 0, 32),
+		Plan:      make([]PlanItem, 0, 8),
 	}
 }
 
