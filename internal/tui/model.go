@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"bytemind/internal/agent"
 	"bytemind/internal/config"
@@ -19,10 +20,12 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 const (
 	defaultSessionLimit = 8
+	pasteSubmitGuard    = 400 * time.Millisecond
 )
 
 type screenKind string
@@ -126,6 +129,9 @@ type model struct {
 	phase          string
 	llmConnected   bool
 	approval       *approvalPrompt
+	lastPasteAt    time.Time
+	lastInputAt    time.Time
+	inputBurstSize int
 }
 
 func newModel(opts Options) model {
@@ -247,21 +253,116 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	}
 
+	if !m.busy && !m.sessionsOpen && !m.helpOpen && !m.commandOpen && m.approval == nil {
+		before := m.input.Value()
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		if m.input.Value() != before {
+			m.noteInputMutation(before, m.input.Value(), "")
+			m.syncCommandPalette()
+		}
+		return m, cmd
+	}
+
 	return m, nil
 }
 
 func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if m.screen != screenChat || m.sessionsOpen || m.helpOpen || m.commandOpen || m.approval != nil {
+	if m.helpOpen || m.commandOpen || m.approval != nil {
+		return m, nil
+	}
+	if m.screen != screenChat && m.screen != screenLanding {
+		return m, nil
+	}
+	if m.screen == screenChat && m.sessionsOpen {
 		return m, nil
 	}
 	switch msg.Button {
-	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown, tea.MouseButtonWheelLeft, tea.MouseButtonWheelRight:
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
+	case tea.MouseButtonWheelUp:
+		if m.mouseOverInput(msg.Y) {
+			m.scrollInput(-3)
+			return m, nil
+		}
+		m.viewport.LineUp(3)
+		return m, nil
+	case tea.MouseButtonWheelDown:
+		if m.mouseOverInput(msg.Y) {
+			m.scrollInput(3)
+			return m, nil
+		}
+		m.viewport.LineDown(3)
+		return m, nil
 	default:
 		return m, nil
 	}
+}
+
+func (m *model) scrollInput(lines int) {
+	if lines == 0 {
+		return
+	}
+
+	keyType := tea.KeyDown
+	if lines < 0 {
+		keyType = tea.KeyUp
+		lines = -lines
+	}
+
+	for i := 0; i < lines; i++ {
+		updated, _ := m.input.Update(tea.KeyMsg{Type: keyType})
+		m.input = updated
+	}
+}
+
+func (m model) mouseOverInput(y int) bool {
+	if m.width == 0 || m.height == 0 {
+		return false
+	}
+
+	if m.screen == screenLanding {
+		return m.mouseOverLandingInput(y)
+	}
+
+	headerHeight := lipgloss.Height(m.renderHeader())
+	footerHeight := lipgloss.Height(m.renderFooter())
+	bodyHeight := m.height - headerHeight - footerHeight
+	if bodyHeight < 6 {
+		bodyHeight = 6
+	}
+
+	footerTop := headerHeight + bodyHeight
+	inputBorder := m.inputBorderStyle().
+		Width(m.chatPanelInnerWidth()).
+		Render(m.input.View())
+	inputHeight := lipgloss.Height(inputBorder)
+	inputTop := footerTop + 1
+	inputBottom := inputTop + inputHeight - 1
+
+	return y >= inputTop && y <= inputBottom
+}
+
+func (m model) mouseOverLandingInput(y int) bool {
+	logo := landingLogoStyle.Render(strings.Join([]string{
+		"   ___       __        __  ___ _           __",
+		"  / _ )__ __/ /____   /  |/  (_)__  ___ _/ /",
+		" / _  / // / __/ -_) / /|_/ / / _ \\/ _ `/ _ \\",
+		"/____/\\_, /\\__/\\__/ /_/  /_/_/_//_/\\_,_/_.__/",
+		"     /___/",
+	}, "\n"))
+	title := landingTitleStyle.Render("AICoding Chat")
+	subtitle := mutedStyle.Render("Start with a prompt below. Press Enter to open the full conversation workspace.")
+	inputBox := landingInputStyle.Copy().
+		BorderForeground(colorAccent).
+		Width(m.landingInputShellWidth()).
+		Render(m.input.View())
+	content := lipgloss.JoinVertical(lipgloss.Center, logo, "", title, subtitle, "", inputBox, "", mutedStyle.Render("Type / for supported commands, Ctrl+C to quit."))
+
+	contentHeight := lipgloss.Height(content)
+	contentTop := max(0, (m.height-contentHeight)/2)
+	inputTop := contentTop + lipgloss.Height(lipgloss.JoinVertical(lipgloss.Center, logo, "", title, subtitle, ""))
+	inputBottom := inputTop + lipgloss.Height(inputBox) - 1
+
+	return y >= inputTop && y <= inputBottom
 }
 
 func (m model) View() string {
@@ -429,18 +530,6 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, m.loadSessionsCmd()
-	case "pgup":
-		m.viewport.PageUp()
-		return m, nil
-	case "pgdown":
-		m.viewport.PageDown()
-		return m, nil
-	case "ctrl+up":
-		m.viewport.LineUp(1)
-		return m, nil
-	case "ctrl+down":
-		m.viewport.LineDown(1)
-		return m, nil
 	case "home":
 		m.viewport.GotoTop()
 		return m, nil
@@ -454,6 +543,16 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if msg.String() == "enter" {
+		if !m.lastPasteAt.IsZero() && time.Since(m.lastPasteAt) < pasteSubmitGuard {
+			before := m.input.Value()
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if m.input.Value() != before {
+				m.noteInputMutation(before, m.input.Value(), "paste-enter")
+				m.syncCommandPalette()
+			}
+			return m, cmd
+		}
 		value := strings.TrimSpace(m.input.Value())
 		if value == "" {
 			return m, nil
@@ -472,10 +571,47 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.submitPrompt(value)
 	}
 
+	before := m.input.Value()
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	if m.input.Value() != before {
+		m.noteInputMutation(before, m.input.Value(), msg.String())
+	}
 	m.syncCommandPalette()
 	return m, cmd
+}
+
+func (m *model) noteInputMutation(before, after, source string) {
+	now := time.Now()
+	delta := len(after) - len(before)
+	if delta < 0 {
+		delta = 0
+	}
+
+	if now.Sub(m.lastInputAt) <= 80*time.Millisecond {
+		m.inputBurstSize += max(1, delta)
+	} else {
+		m.inputBurstSize = max(1, delta)
+	}
+	m.lastInputAt = now
+
+	if source == "paste-enter" ||
+		source == "ctrl+v" ||
+		delta > 1 ||
+		strings.Contains(after[lenCommonPrefix(before, after):], "\n") ||
+		m.inputBurstSize >= 4 {
+		m.lastPasteAt = now
+	}
+}
+
+func lenCommonPrefix(a, b string) int {
+	limit := min(len(a), len(b))
+	for i := 0; i < limit; i++ {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return limit
 }
 
 func (m model) submitPrompt(value string) (tea.Model, tea.Cmd) {
@@ -669,7 +805,7 @@ func (m model) renderConversation() string {
 		}
 		blocks = append(blocks, renderChatRow(item, width))
 	}
-	return strings.Join(blocks, "\n\n")
+	return lipgloss.JoinVertical(lipgloss.Left, blocks...)
 }
 
 func (m *model) syncViewportSize() {
@@ -758,7 +894,7 @@ func (m model) renderHeader() string {
 }
 
 func (m model) renderFooter() string {
-	hint := mutedStyle.Render("Type / for commands  -  ? help  -  Ctrl+Up/Down scroll  -  Enter send  -  Ctrl+N new session  -  Ctrl+L sessions  -  Ctrl+C quit")
+	hint := mutedStyle.Render("Type / for commands  -  ? help  -  Mouse wheel scroll  -  Enter send  -  Ctrl+N new session  -  Ctrl+L sessions  -  Ctrl+C quit")
 	inputBorder := m.inputBorderStyle().
 		Width(m.chatPanelInnerWidth()).
 		Render(m.input.View())
@@ -996,19 +1132,19 @@ func renderChatCard(item chatEntry, width int) string {
 		title = cardTitleStyle.Foreground(colorMuted)
 		border = chatSystemStyle
 	}
-	head := lipgloss.JoinHorizontal(lipgloss.Left, title.Render(item.Title), mutedStyle.Render("  "+item.Status))
-	body := lipgloss.NewStyle().Width(width).Render(formatChatBody(item, width))
-	return border.Width(width + 2).Render(lipgloss.JoinVertical(lipgloss.Left, head, body))
+	outerWidth := max(12, width)
+	innerWidth := max(8, outerWidth-border.GetHorizontalFrameSize())
+	head := lipgloss.NewStyle().
+		Width(innerWidth).
+		Render(lipgloss.JoinHorizontal(lipgloss.Left, title.Render(item.Title), mutedStyle.Render("  "+item.Status)))
+	body := lipgloss.NewStyle().Width(innerWidth).Render(formatChatBody(item, innerWidth))
+	return border.Width(outerWidth).Render(lipgloss.JoinVertical(lipgloss.Left, head, body))
 }
 
 func renderChatRow(item chatEntry, width int) string {
 	bubbleWidth := chatBubbleWidth(item, width)
-	card := renderChatCard(item, bubbleWidth-2)
-	align := lipgloss.Left
-	if item.Kind == "user" {
-		align = lipgloss.Right
-	}
-	return lipgloss.PlaceHorizontal(width, align, card)
+	card := renderChatCard(item, bubbleWidth)
+	return lipgloss.PlaceHorizontal(width, lipgloss.Left, card)
 }
 
 func renderModal(width, height int, modal string) string {
@@ -1021,9 +1157,30 @@ func renderModal(width, height int, modal string) string {
 func formatChatBody(item chatEntry, width int) string {
 	text := strings.ReplaceAll(item.Body, "\r\n", "\n")
 	if item.Kind != "assistant" {
-		return strings.TrimRight(text, "\n")
+		return strings.TrimRight(wrapPlainText(text, width), "\n")
 	}
 	return strings.TrimRight(renderAssistantBody(tidyAssistantSpacing(text), width), "\n")
+}
+
+func wrapPlainText(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+
+	lines := strings.Split(text, "\n")
+	wrapped := make([]string, 0, len(lines))
+	style := lipgloss.NewStyle().MaxWidth(width)
+	for _, line := range lines {
+		if line == "" {
+			wrapped = append(wrapped, "")
+			continue
+		}
+		// Keep plain text within the viewport width before rendering the card.
+		for _, part := range strings.Split(style.Render(runewidth.Wrap(line, width)), "\n") {
+			wrapped = append(wrapped, strings.TrimRight(part, " "))
+		}
+	}
+	return strings.Join(wrapped, "\n")
 }
 
 func tidyAssistantSpacing(text string) string {
@@ -1120,15 +1277,15 @@ func renderAssistantBody(text string, width int) string {
 		case trimmed == "":
 			out = append(out, "")
 		case isMarkdownHeading(trimmed):
-			out = append(out, renderMarkdownHeading(trimmed))
+			out = append(out, renderMarkdownHeading(trimmed, width))
 		case isMarkdownListItem(trimmed):
-			out = append(out, renderMarkdownListItem(line))
+			out = append(out, renderMarkdownListItem(line, width))
 		case strings.HasPrefix(trimmed, ">"):
-			out = append(out, renderMarkdownQuote(trimmed))
+			out = append(out, renderMarkdownQuote(trimmed, width))
 		case looksLikeMarkdownTable(trimmed):
 			out = append(out, tableLineStyle.Render(trimmed))
 		default:
-			out = append(out, line)
+			out = append(out, wrapPlainText(line, width))
 		}
 	}
 
@@ -1145,20 +1302,25 @@ func isMarkdownHeading(line string) bool {
 		strings.HasPrefix(line, "### ")
 }
 
-func renderMarkdownHeading(line string) string {
+func renderMarkdownHeading(line string, width int) string {
 	level := 0
 	for level < len(line) && line[level] == '#' {
 		level++
 	}
 	text := strings.TrimSpace(line[level:])
+	style := assistantHeading3Style
 	switch level {
 	case 1:
-		return assistantHeading1Style.Render(text)
+		style = assistantHeading1Style
 	case 2:
-		return assistantHeading2Style.Render(text)
-	default:
-		return assistantHeading3Style.Render(text)
+		style = assistantHeading2Style
 	}
+	wrapped := strings.Split(wrapPlainText(text, width), "\n")
+	rendered := make([]string, 0, len(wrapped))
+	for _, part := range wrapped {
+		rendered = append(rendered, style.Render(part))
+	}
+	return strings.Join(rendered, "\n")
 }
 
 func isMarkdownListItem(line string) bool {
@@ -1179,7 +1341,7 @@ func isOrderedListItem(line string) bool {
 	return index > 0 && len(line) > index+1 && line[index] == '.' && line[index+1] == ' '
 }
 
-func renderMarkdownListItem(line string) string {
+func renderMarkdownListItem(line string, width int) string {
 	indentWidth := len(line) - len(strings.TrimLeft(line, " "))
 	indent := strings.Repeat(" ", indentWidth)
 	trimmed := strings.TrimSpace(line)
@@ -1203,12 +1365,29 @@ func renderMarkdownListItem(line string) string {
 	if content == "" {
 		content = trimmed
 	}
-	return indent + listMarkerStyle.Render(marker) + " " + content
+
+	prefix := indent + marker + " "
+	contentWidth := max(8, width-runewidth.StringWidth(prefix))
+	wrapped := strings.Split(wrapPlainText(content, contentWidth), "\n")
+	lines := make([]string, 0, len(wrapped))
+	for i, part := range wrapped {
+		if i == 0 {
+			lines = append(lines, indent+listMarkerStyle.Render(marker)+" "+part)
+			continue
+		}
+		lines = append(lines, indent+strings.Repeat(" ", runewidth.StringWidth(marker))+" "+part)
+	}
+	return strings.Join(lines, "\n")
 }
 
-func renderMarkdownQuote(line string) string {
+func renderMarkdownQuote(line string, width int) string {
 	content := strings.TrimSpace(strings.TrimPrefix(line, ">"))
-	return quoteLineStyle.Render(content)
+	wrapped := strings.Split(wrapPlainText(content, max(8, width-2)), "\n")
+	rendered := make([]string, 0, len(wrapped))
+	for _, part := range wrapped {
+		rendered = append(rendered, quoteLineStyle.Render(part))
+	}
+	return strings.Join(rendered, "\n")
 }
 
 func looksLikeMarkdownTable(line string) bool {
@@ -1219,21 +1398,7 @@ func chatBubbleWidth(item chatEntry, width int) int {
 	if width <= 28 {
 		return width
 	}
-
-	bubbleWidth := width
-	if item.Kind == "user" {
-		bubbleWidth = width * 5 / 6
-		if bubbleWidth < 36 {
-			bubbleWidth = width
-		}
-	}
-	if bubbleWidth > width {
-		bubbleWidth = width
-	}
-	if bubbleWidth < 28 {
-		return width
-	}
-	return bubbleWidth
+	return width
 }
 
 func summarizeTool(name, payload string) (string, []string, string) {

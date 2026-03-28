@@ -3,12 +3,14 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"bytemind/internal/session"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestHandleMouseScrollsViewport(t *testing.T) {
@@ -30,6 +32,224 @@ func TestHandleMouseScrollsViewport(t *testing.T) {
 	updated := got.(model)
 	if updated.viewport.YOffset == 0 {
 		t.Fatalf("expected viewport to scroll down, got offset %d", updated.viewport.YOffset)
+	}
+}
+
+func TestHandleMouseWheelUpScrollsViewport(t *testing.T) {
+	m := model{
+		screen: screenChat,
+		viewport: func() (vp viewport.Model) {
+			vp = viewport.New(40, 5)
+			vp.SetContent(strings.Join([]string{
+				"1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+			}, "\n"))
+			vp.LineDown(4)
+			return vp
+		}(),
+	}
+
+	got, _ := m.handleMouse(tea.MouseMsg{
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+	})
+	updated := got.(model)
+	if updated.viewport.YOffset >= m.viewport.YOffset {
+		t.Fatalf("expected viewport to scroll up, got offset %d", updated.viewport.YOffset)
+	}
+}
+
+func TestHandleMouseWheelScrollsInputWhenPointerIsOverInput(t *testing.T) {
+	input := textarea.New()
+	input.Focus()
+	input.SetWidth(40)
+	input.SetHeight(3)
+	input.SetValue("line1\nline2\nline3\nline4\nline5\nline6")
+	input.CursorEnd()
+
+	m := model{
+		screen:    screenChat,
+		sess:      session.New("E:\\bytemind"),
+		workspace: "E:\\bytemind",
+		width:     100,
+		height:    24,
+		input:     input,
+		viewport: func() (vp viewport.Model) {
+			vp = viewport.New(40, 5)
+			vp.SetContent(strings.Join([]string{
+				"1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+			}, "\n"))
+			vp.LineDown(2)
+			return vp
+		}(),
+	}
+
+	beforeLine := m.input.Line()
+	beforeOffset := m.viewport.YOffset
+	got, _ := m.handleMouse(tea.MouseMsg{
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+		Y:      20,
+	})
+	updated := got.(model)
+
+	if updated.input.Line() >= beforeLine {
+		t.Fatalf("expected input cursor to move up, got line %d -> %d", beforeLine, updated.input.Line())
+	}
+	if updated.viewport.YOffset != beforeOffset {
+		t.Fatalf("expected conversation viewport to stay put, got offset %d -> %d", beforeOffset, updated.viewport.YOffset)
+	}
+}
+
+func TestHandleMouseWheelScrollsLandingInputWhenPointerIsOverInput(t *testing.T) {
+	input := textarea.New()
+	input.Focus()
+	input.SetWidth(40)
+	input.SetHeight(3)
+	input.SetValue("line1\nline2\nline3\nline4\nline5\nline6")
+	input.CursorEnd()
+
+	m := model{
+		screen: screenLanding,
+		width:  100,
+		height: 32,
+		input:  input,
+	}
+
+	beforeLine := m.input.Line()
+	got, _ := m.handleMouse(tea.MouseMsg{
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+		Y:      18,
+	})
+	updated := got.(model)
+
+	if updated.input.Line() >= beforeLine {
+		t.Fatalf("expected landing input cursor to move up, got line %d -> %d", beforeLine, updated.input.Line())
+	}
+}
+
+func TestWindowSizeMsgUpdatesViewportDimensions(t *testing.T) {
+	input := textarea.New()
+	m := model{
+		screen:    screenChat,
+		sess:      session.New("E:\\bytemind"),
+		workspace: "E:\\bytemind",
+		input:     input,
+	}
+
+	got, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 36})
+	updated := got.(model)
+
+	if updated.viewport.Width <= 0 {
+		t.Fatalf("expected viewport width to be updated, got %d", updated.viewport.Width)
+	}
+	if updated.viewport.Height <= 0 {
+		t.Fatalf("expected viewport height to be updated, got %d", updated.viewport.Height)
+	}
+}
+
+func TestRefreshViewportKeepsLatestMessagesVisible(t *testing.T) {
+	input := textarea.New()
+	m := model{
+		screen:    screenChat,
+		sess:      session.New("E:\\bytemind"),
+		workspace: "E:\\bytemind",
+		width:     100,
+		height:    24,
+		input:     input,
+		chatItems: make([]chatEntry, 0, 12),
+	}
+	for i := 0; i < 12; i++ {
+		m.chatItems = append(m.chatItems, chatEntry{
+			Kind:   "user",
+			Title:  "You",
+			Body:   strings.Repeat("message ", 8),
+			Status: "final",
+		})
+	}
+
+	m.refreshViewport()
+
+	if m.viewport.YOffset == 0 {
+		t.Fatalf("expected viewport to follow latest content")
+	}
+}
+
+func TestEnterSubmitsPrompt(t *testing.T) {
+	input := textarea.New()
+	input.Focus()
+	input.SetWidth(40)
+	input.SetHeight(3)
+	input.SetValue("ship this prompt")
+	input.CursorEnd()
+
+	m := model{
+		screen:         screenChat,
+		input:          input,
+		workspace:      "E:\\bytemind",
+		sess:           session.New("E:\\bytemind"),
+		streamingIndex: -1,
+	}
+
+	got, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := got.(model)
+
+	if len(updated.chatItems) < 2 {
+		t.Fatalf("expected enter to submit prompt, got %d chat items", len(updated.chatItems))
+	}
+	if updated.chatItems[0].Body != "ship this prompt" {
+		t.Fatalf("expected submitted user prompt to match input, got %q", updated.chatItems[0].Body)
+	}
+}
+
+func TestImmediateEnterAfterPasteDoesNotSubmit(t *testing.T) {
+	input := textarea.New()
+	input.Focus()
+	input.SetWidth(40)
+	input.SetHeight(3)
+	input.SetValue("first line")
+	input.CursorEnd()
+
+	m := model{
+		screen:      screenChat,
+		input:       input,
+		workspace:   "E:\\bytemind",
+		sess:        session.New("E:\\bytemind"),
+		lastPasteAt: time.Now(),
+	}
+
+	got, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := got.(model)
+
+	if len(updated.chatItems) != 0 {
+		t.Fatalf("expected immediate enter after paste not to submit")
+	}
+	if updated.input.Value() != "first line\n" {
+		t.Fatalf("expected pasted enter to stay inside input, got %q", updated.input.Value())
+	}
+}
+
+func TestEnterSubmitsAfterPasteGuardExpires(t *testing.T) {
+	input := textarea.New()
+	input.Focus()
+	input.SetWidth(40)
+	input.SetHeight(3)
+	input.SetValue("first line\nsecond line")
+	input.CursorEnd()
+
+	m := model{
+		screen:      screenChat,
+		input:       input,
+		workspace:   "E:\\bytemind",
+		sess:        session.New("E:\\bytemind"),
+		lastPasteAt: time.Now().Add(-time.Second),
+	}
+
+	got, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	updated := got.(model)
+
+	if len(updated.chatItems) < 2 {
+		t.Fatalf("expected enter to submit after paste guard expires, got %d chat items", len(updated.chatItems))
 	}
 }
 
@@ -73,8 +293,20 @@ func TestRenderFooterDoesNotAdvertiseHistory(t *testing.T) {
 	if strings.Contains(footer, "Up/Down history") {
 		t.Fatalf("footer should not advertise history navigation")
 	}
+	if strings.Contains(footer, "Ctrl+Up/Down scroll") {
+		t.Fatalf("footer should not advertise keyboard scrolling")
+	}
 	if !strings.Contains(footer, "? help") {
 		t.Fatalf("footer should advertise help shortcut")
+	}
+	if !strings.Contains(footer, "Mouse wheel scroll") {
+		t.Fatalf("footer should advertise mouse wheel scrolling")
+	}
+	if !strings.Contains(footer, "Enter send") {
+		t.Fatalf("footer should advertise enter as send")
+	}
+	if strings.Contains(footer, "Alt+Enter") {
+		t.Fatalf("footer should not advertise alt+enter")
 	}
 }
 
@@ -196,8 +428,50 @@ func TestAssistantChatBubbleUsesFullAvailableWidth(t *testing.T) {
 	}
 
 	userWidth := chatBubbleWidth(chatEntry{Kind: "user"}, width)
-	if userWidth >= width {
-		t.Fatalf("expected user bubble to stay narrower than the full width, got %d", userWidth)
+	if userWidth != width {
+		t.Fatalf("expected user bubble width %d, got %d", width, userWidth)
+	}
+}
+
+func TestRenderChatRowFitsViewportWidth(t *testing.T) {
+	row := renderChatRow(chatEntry{
+		Kind:   "user",
+		Title:  "You",
+		Body:   "Please describe the relationship between tui, session, agent, and tools in several paragraphs so we can inspect wrapping behavior.",
+		Status: "final",
+	}, 80)
+
+	if lipgloss.Width(row) > 80 {
+		t.Fatalf("expected rendered row to fit viewport width, got %d", lipgloss.Width(row))
+	}
+	if !strings.Contains(row, "Please describe the relationship") {
+		t.Fatalf("expected rendered row to contain the full user message")
+	}
+}
+
+func TestRenderConversationPreservesFullUserText(t *testing.T) {
+	m := model{
+		viewport: func() (vp viewport.Model) {
+			vp = viewport.New(40, 10)
+			vp.Width = 40
+			return vp
+		}(),
+		chatItems: []chatEntry{
+			{
+				Kind:   "user",
+				Title:  "You",
+				Body:   "请分很多段详细介绍一下当前仓库里tui、session、agent、tools的关系，每一部分至少写五到八行。",
+				Status: "final",
+			},
+		},
+	}
+
+	got := m.renderConversation()
+	flat := strings.NewReplacer("\n", "", " ", "").Replace(got)
+	for _, want := range []string{"请分很多段详细介绍一下当前仓库里", "tools的关系", "每一部分至少写五到八行"} {
+		if !strings.Contains(flat, want) {
+			t.Fatalf("expected conversation to preserve %q, got %q", want, got)
+		}
 	}
 }
 
@@ -237,6 +511,22 @@ func TestFormatChatBodyPreservesExplicitBlankLines(t *testing.T) {
 	got := formatChatBody(item, 80)
 	if !strings.Contains(got, "first paragraph\n\nsecond paragraph") {
 		t.Fatalf("expected explicit blank line to be preserved, got %q", got)
+	}
+}
+
+func TestFormatChatBodyWrapsLongUserText(t *testing.T) {
+	item := chatEntry{
+		Kind: "user",
+		Body: "请分很多段详细介绍一下当前仓库里tui、session、agent、tools的关系这样我可以观察中文长文本是否会完整换行显示",
+	}
+
+	got := formatChatBody(item, 16)
+	if !strings.Contains(got, "\n") {
+		t.Fatalf("expected long user text to wrap, got %q", got)
+	}
+	flat := strings.ReplaceAll(got, "\n", "")
+	if flat != item.Body {
+		t.Fatalf("expected wrapped user text to preserve all content, got %q", got)
 	}
 }
 
