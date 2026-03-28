@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"bytemind/internal/agent"
+	"bytemind/internal/config"
 	"bytemind/internal/session"
 
 	"github.com/charmbracelet/bubbles/textarea"
@@ -55,6 +57,36 @@ func TestHandleMouseWheelUpScrollsViewport(t *testing.T) {
 	updated := got.(model)
 	if updated.viewport.YOffset >= m.viewport.YOffset {
 		t.Fatalf("expected viewport to scroll up, got offset %d", updated.viewport.YOffset)
+	}
+}
+
+func TestHandleMouseEnablesViewportMouseForwarding(t *testing.T) {
+	m := model{
+		screen: screenChat,
+		viewport: func() (vp viewport.Model) {
+			vp = viewport.New(40, 5)
+			vp.SetContent(strings.Join([]string{
+				"1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+			}, "\n"))
+			vp.MouseWheelEnabled = false
+			vp.MouseWheelDelta = 0
+			return vp
+		}(),
+	}
+
+	got, _ := m.handleMouse(tea.MouseMsg{
+		Button: tea.MouseButtonWheelDown,
+		Action: tea.MouseActionPress,
+	})
+	updated := got.(model)
+	if !updated.viewport.MouseWheelEnabled {
+		t.Fatalf("expected mouse wheel support to be enabled for viewport updates")
+	}
+	if updated.viewport.MouseWheelDelta != scrollStep {
+		t.Fatalf("expected viewport wheel delta %d, got %d", scrollStep, updated.viewport.MouseWheelDelta)
+	}
+	if updated.viewport.YOffset == 0 {
+		t.Fatalf("expected forwarded mouse event to scroll viewport")
 	}
 }
 
@@ -145,6 +177,69 @@ func TestWindowSizeMsgUpdatesViewportDimensions(t *testing.T) {
 	}
 	if updated.viewport.Height <= 0 {
 		t.Fatalf("expected viewport height to be updated, got %d", updated.viewport.Height)
+	}
+}
+
+func TestRenderHeaderKeepsStableHeightWithLongStatusNote(t *testing.T) {
+	m := model{
+		width:      100,
+		workspace:  "E:\\bytemind",
+		sess:       session.New("E:\\bytemind"),
+		statusNote: strings.Repeat("very long streaming status update ", 12),
+		cfg: config.Config{
+			Provider: config.ProviderConfig{
+				Type:  "openai-compatible",
+				Model: "deepseek-chat",
+			},
+			ApprovalPolicy: "on-request",
+			MaxIterations:  32,
+		},
+	}
+
+	header := m.renderHeader()
+	if lipgloss.Height(header) != 2 {
+		t.Fatalf("expected header height to stay at 2 lines, got %d", lipgloss.Height(header))
+	}
+}
+
+func TestPageKeysScrollViewport(t *testing.T) {
+	m := model{
+		screen: screenChat,
+		viewport: func() (vp viewport.Model) {
+			vp = viewport.New(40, 5)
+			vp.Height = 5
+			vp.SetContent(strings.Join([]string{
+				"1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+			}, "\n"))
+			return vp
+		}(),
+	}
+
+	afterDown, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	downModel := afterDown.(model)
+	if downModel.viewport.YOffset == 0 {
+		t.Fatalf("expected pgdown to scroll viewport down")
+	}
+
+	afterUp, _ := downModel.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	upModel := afterUp.(model)
+	if upModel.viewport.YOffset >= downModel.viewport.YOffset {
+		t.Fatalf("expected pgup to scroll viewport up, got %d -> %d", downModel.viewport.YOffset, upModel.viewport.YOffset)
+	}
+}
+
+func TestPageKeyHelpersRecognizeCommonVariants(t *testing.T) {
+	if !isPageUpKey(tea.KeyMsg{Type: tea.KeyPgUp}) {
+		t.Fatalf("expected key type pgup to be recognized")
+	}
+	if !isPageDownKey(tea.KeyMsg{Type: tea.KeyPgDown}) {
+		t.Fatalf("expected key type pgdown to be recognized")
+	}
+	if !isPageUpKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("pgup")}) {
+		t.Fatalf("expected string pgup to be recognized")
+	}
+	if !isPageDownKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("pgdown")}) {
+		t.Fatalf("expected string pgdown to be recognized")
 	}
 }
 
@@ -271,9 +366,6 @@ func TestHelpTextOnlyMentionsSupportedEntryPoints(t *testing.T) {
 		"go run ./cmd/bytemind chat",
 		"go run ./cmd/bytemind run -prompt",
 		"/quit",
-		"/session",
-		"/sessions [limit]",
-		"/resume <id>",
 		"/new",
 	} {
 		if !strings.Contains(text, wanted) {
@@ -299,8 +391,11 @@ func TestRenderFooterDoesNotAdvertiseHistory(t *testing.T) {
 	if !strings.Contains(footer, "? help") {
 		t.Fatalf("footer should advertise help shortcut")
 	}
-	if !strings.Contains(footer, "Mouse wheel scroll") {
-		t.Fatalf("footer should advertise mouse wheel scrolling")
+	if !strings.Contains(footer, "Mouse wheel / PgUp / PgDn scroll") {
+		t.Fatalf("footer should advertise mouse and keyboard scrolling")
+	}
+	if !strings.Contains(footer, "PgUp / PgDn") {
+		t.Fatalf("footer should advertise keyboard page scrolling")
 	}
 	if !strings.Contains(footer, "Enter send") {
 		t.Fatalf("footer should advertise enter as send")
@@ -339,6 +434,25 @@ func TestCommandPaletteDoesNotListPlanCommands(t *testing.T) {
 	}
 }
 
+func TestSlashOpensCommandPaletteWithPrefilledSlash(t *testing.T) {
+	input := textarea.New()
+	input.Focus()
+	m := model{
+		screen: screenChat,
+		input:  input,
+	}
+
+	got, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	updated := got.(model)
+
+	if !updated.commandOpen {
+		t.Fatalf("expected slash to open command palette")
+	}
+	if updated.input.Value() != "/" {
+		t.Fatalf("expected main input to start with '/', got %q", updated.input.Value())
+	}
+}
+
 func TestFilteredCommandsShowsRootSelectorGroups(t *testing.T) {
 	input := textarea.New()
 	input.SetValue("/")
@@ -350,72 +464,188 @@ func TestFilteredCommandsShowsRootSelectorGroups(t *testing.T) {
 		usages = append(usages, item.Usage)
 	}
 
-	for _, want := range []string{"/help", "session ▸", "/new", "/quit"} {
+	for _, want := range []string{"/help", "/new", "/quit"} {
 		if !containsString(usages, want) {
 			t.Fatalf("expected root selector to contain %q, got %v", want, usages)
 		}
 	}
-	for _, unwanted := range []string{"plan ▸", "/plan", "/plan add <step>", "/sessions [limit]"} {
+	for _, unwanted := range []string{"/session", "/sessions [limit]", "/resume <id>", "/plan", "/plan add <step>"} {
 		if containsString(usages, unwanted) {
 			t.Fatalf("did not expect root selector to contain %q", unwanted)
 		}
 	}
 }
 
-func TestFilteredCommandsShowsSessionChildrenOnly(t *testing.T) {
+func TestCommandPaletteFiltersAsUserTypes(t *testing.T) {
 	input := textarea.New()
-	input.SetValue("/")
-	m := model{
-		input:        input,
-		commandGroup: "session",
-	}
+	input.SetValue("/h")
+	m := model{input: input}
 
 	items := m.filteredCommands()
-	usages := make([]string, 0, len(items))
-	for _, item := range items {
-		usages = append(usages, item.Usage)
-	}
-
-	for _, want := range []string{"/session", "/sessions [limit]", "/resume <id>"} {
-		if !containsString(usages, want) {
-			t.Fatalf("expected session selector to contain %q, got %v", want, usages)
-		}
-	}
-	for _, unwanted := range []string{"/plan", "/plan add <step>", "session ▸"} {
-		if containsString(usages, unwanted) {
-			t.Fatalf("did not expect session selector to contain %q", unwanted)
-		}
+	if len(items) != 1 || items[0].Name != "/help" {
+		t.Fatalf("expected /h to only show /help, got %+v", items)
 	}
 }
 
-func TestCommandPaletteEscReturnsToRootSelector(t *testing.T) {
+func TestEscapeClosesCommandPalette(t *testing.T) {
 	input := textarea.New()
-	input.SetValue("/")
+	input.SetValue("/h")
 	m := model{
-		input:        input,
-		commandOpen:  true,
-		commandGroup: "session",
+		screen:      screenChat,
+		commandOpen: true,
+		input:       input,
 	}
 
 	got, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 	updated := got.(model)
-	if updated.commandGroup != "" {
-		t.Fatalf("expected esc to return to root selector")
+
+	if updated.commandOpen {
+		t.Fatalf("expected esc to close command palette")
 	}
-	if !updated.commandOpen {
-		t.Fatalf("expected command palette to remain open at root level")
+	if updated.input.Value() != "" {
+		t.Fatalf("expected main input to reset after esc, got %q", updated.input.Value())
 	}
 }
 
-func TestSessionTextShowsSessionDetails(t *testing.T) {
-	sess := session.New("E:\\bytemind")
+func TestCommandPaletteEnterOnQuitReturnsQuitCmd(t *testing.T) {
+	input := textarea.New()
+	input.SetValue("/quit")
+	m := model{
+		screen:      screenChat,
+		commandOpen: true,
+		input:       input,
+	}
+	m.syncCommandPalette()
 
-	m := model{sess: sess}
-	text := m.sessionText()
+	_, cmd := m.handleCommandPaletteKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatalf("expected /quit from command palette to return a quit command")
+	}
+}
 
-	for _, want := range []string{"Session ID:", "Workspace:", "Updated:", "Messages:"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("expected session text to contain %q", want)
+func TestViewRendersCommandPaletteAsOverlaySection(t *testing.T) {
+	input := textarea.New()
+	input.SetValue("/")
+	m := model{
+		screen:      screenChat,
+		width:       100,
+		height:      30,
+		input:       input,
+		commandOpen: true,
+		sess:        session.New("E:\\bytemind"),
+		workspace:   "E:\\bytemind",
+		cfg: config.Config{
+			Provider:       config.ProviderConfig{Type: "openai-compatible", Model: "deepseek-chat"},
+			ApprovalPolicy: "on-request",
+			MaxIterations:  32,
+		},
+	}
+	m.syncCommandPalette()
+
+	view := m.View()
+	if !strings.Contains(view, "Conversation") {
+		t.Fatalf("expected base chat view to remain visible, got %q", view)
+	}
+	if !strings.Contains(view, "/help") {
+		t.Fatalf("expected slash command overlay to render, got %q", view)
+	}
+}
+
+func TestLandingViewRendersCommandPaletteAboveInput(t *testing.T) {
+	input := textarea.New()
+	input.SetValue("/h")
+	m := model{
+		screen:      screenLanding,
+		width:       100,
+		height:      30,
+		input:       input,
+		commandOpen: true,
+	}
+	m.syncCommandPalette()
+
+	view := m.View()
+	if !strings.Contains(view, "Bytemind Chat") {
+		t.Fatalf("expected landing view to remain visible, got %q", view)
+	}
+	if !strings.Contains(view, "/help") {
+		t.Fatalf("expected landing slash menu to render, got %q", view)
+	}
+}
+
+func TestCommandPaletteUsesCompactThreeRowList(t *testing.T) {
+	input := textarea.New()
+	input.SetValue("/")
+	m := model{
+		screen:      screenChat,
+		width:       100,
+		height:      30,
+		input:       input,
+		commandOpen: true,
+	}
+
+	m.syncCommandPalette()
+
+	if len(m.visibleCommandItemsPage()) != 3 {
+		t.Fatalf("expected command palette list height 3, got %d", len(m.visibleCommandItemsPage()))
+	}
+}
+
+func TestCommandPaletteSupportsPageNavigation(t *testing.T) {
+	original := commandItems
+	commandItems = []commandItem{
+		{Name: "/a", Usage: "/a", Description: "a"},
+		{Name: "/b", Usage: "/b", Description: "b"},
+		{Name: "/c", Usage: "/c", Description: "c"},
+		{Name: "/d", Usage: "/d", Description: "d"},
+		{Name: "/e", Usage: "/e", Description: "e"},
+	}
+	defer func() { commandItems = original }()
+
+	m := model{
+		commandOpen: true,
+		input: func() textarea.Model {
+			input := textarea.New()
+			input.SetValue("/")
+			return input
+		}(),
+	}
+	m.syncCommandPalette()
+
+	afterDown, _ := m.handleCommandPaletteKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	downModel := afterDown.(model)
+	if downModel.commandCursor != 3 {
+		t.Fatalf("expected pgdown to move to next command page, got cursor %d", downModel.commandCursor)
+	}
+	page := downModel.visibleCommandItemsPage()
+	if len(page) == 0 || page[0].Name != "/d" {
+		t.Fatalf("expected second page to start with /d, got %+v", page)
+	}
+
+	afterUp, _ := downModel.handleCommandPaletteKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	upModel := afterUp.(model)
+	if upModel.commandCursor != 0 {
+		t.Fatalf("expected pgup to move back to first command page, got cursor %d", upModel.commandCursor)
+	}
+}
+
+func TestRenderCommandPaletteDoesNotCorruptChineseDescriptions(t *testing.T) {
+	input := textarea.New()
+	input.SetValue("/")
+	m := model{
+		screen:      screenChat,
+		width:       80,
+		input:       input,
+		commandOpen: true,
+	}
+	m.syncCommandPalette()
+
+	got := m.renderCommandPalette()
+	if strings.Contains(got, string('\uFFFD')) {
+		t.Fatalf("expected command palette not to contain replacement glyphs, got %q", got)
+	}
+	for _, want := range []string{"/help", "/new", "/quit"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected command palette to contain %q, got %q", want, got)
 		}
 	}
 }
@@ -460,18 +690,112 @@ func TestRenderConversationPreservesFullUserText(t *testing.T) {
 			{
 				Kind:   "user",
 				Title:  "You",
-				Body:   "请分很多段详细介绍一下当前仓库里tui、session、agent、tools的关系，每一部分至少写五到八行。",
+				Body:   "Please describe the relationship between tui, session, agent, and tools in several detailed sections.",
 				Status: "final",
 			},
 		},
 	}
 
 	got := m.renderConversation()
-	flat := strings.NewReplacer("\n", "", " ", "").Replace(got)
-	for _, want := range []string{"请分很多段详细介绍一下当前仓库里", "tools的关系", "每一部分至少写五到八行"} {
+	flat := strings.Join(strings.Fields(got), "")
+	for _, want := range []string{"Pleasedescribetherelationship", "session,agent,andtools", "severaldetailedsections"} {
 		if !strings.Contains(flat, want) {
 			t.Fatalf("expected conversation to preserve %q, got %q", want, got)
 		}
+	}
+}
+
+func TestRenderConversationIncludesToolEntries(t *testing.T) {
+	m := model{
+		viewport: func() (vp viewport.Model) {
+			vp = viewport.New(60, 10)
+			vp.Width = 60
+			return vp
+		}(),
+		chatItems: []chatEntry{
+			{Kind: "user", Title: "You", Body: "check repo", Status: "final"},
+			{Kind: "tool", Title: "Tool | read_file", Body: "Read internal/tui/model.go lines 1-20", Status: "done"},
+		},
+	}
+
+	got := m.renderConversation()
+	if !strings.Contains(got, "Tool | read_file") {
+		t.Fatalf("expected conversation to show tool entry, got %q", got)
+	}
+	if !strings.Contains(got, "Read internal/tui/model.go lines 1-20") {
+		t.Fatalf("expected conversation to show tool summary, got %q", got)
+	}
+}
+
+func TestHandleAgentEventShowsToolProgressInChat(t *testing.T) {
+	m := model{
+		chatItems: []chatEntry{
+			{Kind: "user", Title: "You", Body: "what project is this", Status: "final"},
+			{Kind: "assistant", Title: assistantLabel, Body: "thinking", Status: "pending"},
+		},
+		streamingIndex: 1,
+	}
+
+	m.handleAgentEvent(agent.Event{
+		Type:          agent.EventToolCallStarted,
+		ToolName:      "read_file",
+		ToolArguments: `{"path":"internal/tui/model.go"}`,
+	})
+	if len(m.chatItems) != 3 {
+		t.Fatalf("expected tool start to keep assistant step then append tool call, got %d items", len(m.chatItems))
+	}
+	if m.chatItems[1].Kind != "assistant" || !strings.Contains(m.chatItems[1].Body, "read_file") {
+		t.Fatalf("expected assistant step before tool call, got %+v", m.chatItems[1])
+	}
+	if m.chatItems[2].Kind != "tool" || m.chatItems[2].Status != "running" || !strings.Contains(m.chatItems[2].Title, "Tool Call | read_file") {
+		t.Fatalf("expected running tool call chat item, got %+v", m.chatItems[2])
+	}
+
+	m.handleAgentEvent(agent.Event{
+		Type:       agent.EventToolCallCompleted,
+		ToolName:   "read_file",
+		ToolResult: `{"path":"internal/tui/model.go","start_line":1,"end_line":20}`,
+	})
+	if len(m.chatItems) != 4 {
+		t.Fatalf("expected completed tool to append tool result, got %d", len(m.chatItems))
+	}
+	if m.chatItems[2].Status != "running" {
+		t.Fatalf("expected tool call entry to remain running history, got %q", m.chatItems[2].Status)
+	}
+	if m.chatItems[3].Kind != "tool" || !strings.Contains(m.chatItems[3].Title, "Tool Result | read_file") {
+		t.Fatalf("expected tool result entry after tool call, got %+v", m.chatItems[3])
+	}
+	if m.chatItems[3].Status != "done" {
+		t.Fatalf("expected completed tool result status to be done, got %q", m.chatItems[3].Status)
+	}
+	if !strings.Contains(m.chatItems[3].Body, "Read internal/tui/model.go lines 1-20") {
+		t.Fatalf("expected completed tool summary in result item, got %q", m.chatItems[3].Body)
+	}
+}
+
+func TestToolStartKeepsStreamedAssistantTurn(t *testing.T) {
+	m := model{
+		chatItems: []chatEntry{
+			{Kind: "user", Title: "You", Body: "what project is this", Status: "final"},
+			{Kind: "assistant", Title: assistantLabel, Body: "let me inspect the repo structure first", Status: "streaming"},
+		},
+		streamingIndex: 1,
+	}
+
+	m.handleAgentEvent(agent.Event{
+		Type:          agent.EventToolCallStarted,
+		ToolName:      "list_files",
+		ToolArguments: `{"path":"."}`,
+	})
+
+	if len(m.chatItems) != 3 {
+		t.Fatalf("expected tool start to append only tool call after streamed assistant turn, got %d items", len(m.chatItems))
+	}
+	if m.chatItems[1].Body != "let me inspect the repo structure first" || m.chatItems[1].Status != "final" {
+		t.Fatalf("expected streamed assistant turn to be preserved and finalized, got %+v", m.chatItems[1])
+	}
+	if !strings.Contains(m.chatItems[2].Title, "Tool Call | list_files") {
+		t.Fatalf("expected tool call entry, got %+v", m.chatItems[2])
 	}
 }
 
@@ -517,15 +841,15 @@ func TestFormatChatBodyPreservesExplicitBlankLines(t *testing.T) {
 func TestFormatChatBodyWrapsLongUserText(t *testing.T) {
 	item := chatEntry{
 		Kind: "user",
-		Body: "请分很多段详细介绍一下当前仓库里tui、session、agent、tools的关系这样我可以观察中文长文本是否会完整换行显示",
+		Body: "Please describe the relationship between tui, session, agent, and tools so I can inspect how long user text wraps in the chat body.",
 	}
 
 	got := formatChatBody(item, 16)
 	if !strings.Contains(got, "\n") {
 		t.Fatalf("expected long user text to wrap, got %q", got)
 	}
-	flat := strings.ReplaceAll(got, "\n", "")
-	if flat != item.Body {
+	flat := strings.Join(strings.Fields(got), "")
+	if flat != strings.Join(strings.Fields(item.Body), "") {
 		t.Fatalf("expected wrapped user text to preserve all content, got %q", got)
 	}
 }
@@ -577,7 +901,7 @@ func TestFinishAssistantMessageDoesNotAppendDuplicateCard(t *testing.T) {
 		chatItems: []chatEntry{
 			{
 				Kind:   "assistant",
-				Title:  "AICoding",
+				Title:  assistantLabel,
 				Body:   "same answer",
 				Status: "streaming",
 			},

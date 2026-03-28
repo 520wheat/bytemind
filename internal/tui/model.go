@@ -25,7 +25,12 @@ import (
 
 const (
 	defaultSessionLimit = 8
+	scrollStep          = 3
+	commandPageSize     = 3
 	pasteSubmitGuard    = 400 * time.Millisecond
+	assistantLabel      = "Bytemind"
+	chatTitleLabel      = "Bytemind Chat"
+	tuiTitleLabel       = "Bytemind TUI"
 )
 
 type screenKind string
@@ -48,6 +53,10 @@ type commandItem struct {
 	Description string
 	Group       string
 	Kind        string
+}
+
+func (c commandItem) FilterValue() string {
+	return strings.ToLower(strings.TrimPrefix(c.Usage, "/") + " " + c.Description)
 }
 
 type toolRun struct {
@@ -88,12 +97,8 @@ type sessionsLoadedMsg struct {
 
 var commandItems = []commandItem{
 	{Name: "/help", Usage: "/help", Description: "打开帮助面板，查看当前可用命令和基础用法。", Kind: "command"},
-	{Name: "session", Usage: "session ▸", Description: "查看当前会话、历史会话和恢复会话。", Group: "session", Kind: "group"},
 	{Name: "/new", Usage: "/new", Description: "在当前工作区创建一个全新的持久会话。", Kind: "command"},
 	{Name: "/quit", Usage: "/quit", Description: "退出当前 TUI 界面。", Kind: "command"},
-	{Name: "/session", Usage: "/session", Description: "查看当前会话 ID、工作区路径和最近更新时间。", Group: "session", Kind: "command"},
-	{Name: "/sessions", Usage: "/sessions [limit]", Description: "列出最近的历史会话，方便恢复之前的上下文。", Group: "session", Kind: "command"},
-	{Name: "/resume", Usage: "/resume <id>", Description: "按完整 ID 或前缀恢复一个已有会话。", Group: "session", Kind: "command"},
 }
 
 type model struct {
@@ -117,12 +122,11 @@ type model struct {
 	sessions       []session.Summary
 	sessionLimit   int
 	sessionCursor  int
+	commandCursor  int
 	screen         screenKind
 	sessionsOpen   bool
 	helpOpen       bool
 	commandOpen    bool
-	commandGroup   string
-	commandCursor  int
 	busy           bool
 	streamingIndex int
 	statusNote     string
@@ -138,7 +142,7 @@ func newModel(opts Options) model {
 	async := make(chan tea.Msg, 128)
 
 	input := textarea.New()
-	input.Placeholder = "Ask AICoding to inspect, change, or verify this workspace..."
+	input.Placeholder = "Ask Bytemind to inspect, change, or verify this workspace..."
 	input.Focus()
 	input.CharLimit = 0
 	input.SetWidth(72)
@@ -152,6 +156,8 @@ func newModel(opts Options) model {
 
 	vp := viewport.New(0, 0)
 	vp.YPosition = 0
+	vp.MouseWheelEnabled = true
+	vp.MouseWheelDelta = scrollStep
 
 	chatItems, toolRuns := rebuildSessionTimeline(opts.Session)
 	summaries, _ := opts.Store.List(defaultSessionLimit)
@@ -277,135 +283,135 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.screen == screenChat && m.sessionsOpen {
 		return m, nil
 	}
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		if m.mouseOverInput(msg.Y) {
-			m.scrollInput(-3)
+	if m.mouseOverInput(msg.Y) {
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.scrollInput(-scrollStep)
+			return m, nil
+		case tea.MouseButtonWheelDown:
+			m.scrollInput(scrollStep)
+			return m, nil
+		default:
 			return m, nil
 		}
-		m.viewport.LineUp(3)
-		return m, nil
-	case tea.MouseButtonWheelDown:
-		if m.mouseOverInput(msg.Y) {
-			m.scrollInput(3)
-			return m, nil
-		}
-		m.viewport.LineDown(3)
-		return m, nil
-	default:
-		return m, nil
+	}
+	if m.screen == screenChat {
+		m.ensureViewportMouse()
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m, cmd
+	}
+	return m, nil
+}
+
+func viewportPageStep(height int) int {
+	if height <= 0 {
+		return scrollStep * 2
+	}
+	return max(scrollStep*2, height-1)
+}
+
+func isPageUpKey(msg tea.KeyMsg) bool {
+	key := strings.ToLower(msg.String())
+	return msg.Type == tea.KeyPgUp || key == "pgup" || key == "pageup"
+}
+
+func isPageDownKey(msg tea.KeyMsg) bool {
+	key := strings.ToLower(msg.String())
+	return msg.Type == tea.KeyPgDown || key == "pgdown" || key == "pagedown"
+}
+
+func (m *model) ensureViewportMouse() {
+	m.viewport.MouseWheelEnabled = true
+	if m.viewport.MouseWheelDelta <= 0 {
+		m.viewport.MouseWheelDelta = scrollStep
 	}
 }
 
-func (m *model) scrollInput(lines int) {
-	if lines == 0 {
-		return
-	}
-
-	keyType := tea.KeyDown
-	if lines < 0 {
-		keyType = tea.KeyUp
-		lines = -lines
-	}
-
-	for i := 0; i < lines; i++ {
-		updated, _ := m.input.Update(tea.KeyMsg{Type: keyType})
-		m.input = updated
+func (m *model) scrollInput(delta int) {
+	switch {
+	case delta < 0:
+		for i := 0; i < -delta; i++ {
+			m.input.CursorUp()
+		}
+	case delta > 0:
+		for i := 0; i < delta; i++ {
+			m.input.CursorDown()
+		}
 	}
 }
 
 func (m model) mouseOverInput(y int) bool {
-	if m.width == 0 || m.height == 0 {
+	switch m.screen {
+	case screenLanding:
+		return m.mouseOverLandingInput(y)
+	case screenChat:
+		return m.mouseOverChatInput(y)
+	default:
 		return false
 	}
+}
 
-	if m.screen == screenLanding {
-		return m.mouseOverLandingInput(y)
+func (m model) mouseOverChatInput(y int) bool {
+	if m.height <= 0 {
+		return false
 	}
-
-	headerHeight := lipgloss.Height(m.renderHeader())
 	footerHeight := lipgloss.Height(m.renderFooter())
-	bodyHeight := m.height - headerHeight - footerHeight
-	if bodyHeight < 6 {
-		bodyHeight = 6
+	footerTop := max(0, m.height-footerHeight)
+	inputHeight := lipgloss.Height(
+		m.inputBorderStyle().
+			Width(m.chatPanelInnerWidth()).
+			Render(m.input.View()),
+	)
+	inputTop := footerTop + panelStyle.GetVerticalFrameSize()/2
+	if m.approval != nil {
+		inputTop += lipgloss.Height(m.renderApprovalBanner())
 	}
-
-	footerTop := headerHeight + bodyHeight
-	inputBorder := m.inputBorderStyle().
-		Width(m.chatPanelInnerWidth()).
-		Render(m.input.View())
-	inputHeight := lipgloss.Height(inputBorder)
-	inputTop := footerTop + 1
-	inputBottom := inputTop + inputHeight - 1
-
+	inputBottom := inputTop + max(1, inputHeight) - 1
 	return y >= inputTop && y <= inputBottom
 }
 
 func (m model) mouseOverLandingInput(y int) bool {
-	logo := landingLogoStyle.Render(strings.Join([]string{
+	if m.height <= 0 {
+		return false
+	}
+	logoHeight := lipgloss.Height(landingLogoStyle.Render(strings.Join([]string{
 		"   ___       __        __  ___ _           __",
 		"  / _ )__ __/ /____   /  |/  (_)__  ___ _/ /",
 		" / _  / // / __/ -_) / /|_/ / / _ \\/ _ `/ _ \\",
 		"/____/\\_, /\\__/\\__/ /_/  /_/_/_//_/\\_,_/_.__/",
 		"     /___/",
-	}, "\n"))
-	title := landingTitleStyle.Render("AICoding Chat")
-	subtitle := mutedStyle.Render("Start with a prompt below. Press Enter to open the full conversation workspace.")
-	inputBox := landingInputStyle.Copy().
-		BorderForeground(colorAccent).
-		Width(m.landingInputShellWidth()).
-		Render(m.input.View())
-	content := lipgloss.JoinVertical(lipgloss.Center, logo, "", title, subtitle, "", inputBox, "", mutedStyle.Render("Type / for supported commands, Ctrl+C to quit."))
-
-	contentHeight := lipgloss.Height(content)
+	}, "\n")))
+	titleHeight := lipgloss.Height(landingTitleStyle.Render(chatTitleLabel))
+	subtitleHeight := lipgloss.Height(mutedStyle.Render("Start with a prompt below. Press Enter to open the full conversation workspace."))
+	inputHeight := lipgloss.Height(
+		landingInputStyle.Copy().
+			BorderForeground(colorAccent).
+			Width(m.landingInputShellWidth()).
+			Render(m.input.View()),
+	)
+	hintHeight := lipgloss.Height(mutedStyle.Render("Type / for supported commands, Ctrl+C to quit."))
+	contentHeight := logoHeight + 1 + titleHeight + subtitleHeight + 1 + inputHeight + 1 + hintHeight
 	contentTop := max(0, (m.height-contentHeight)/2)
-	inputTop := contentTop + lipgloss.Height(lipgloss.JoinVertical(lipgloss.Center, logo, "", title, subtitle, ""))
-	inputBottom := inputTop + lipgloss.Height(inputBox) - 1
-
+	inputTop := contentTop + logoHeight + 1 + titleHeight + subtitleHeight + 1
+	inputBottom := inputTop + max(1, inputHeight) - 1
 	return y >= inputTop && y <= inputBottom
 }
 
-func (m model) View() string {
-	if m.width == 0 || m.height == 0 {
-		return "Loading TUI..."
-	}
-
-	if m.screen == screenLanding {
-		base := m.renderLanding()
-		switch {
-		case m.helpOpen:
-			return renderModal(m.width, m.height, m.renderHelpModal())
-		case m.commandOpen:
-			return renderModal(m.width, m.height, m.renderCommandPalette())
-		default:
-			return base
+func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case isPageUpKey(msg):
+		if m.screen == screenChat && !m.sessionsOpen && !m.commandOpen && !m.helpOpen {
+			m.viewport.LineUp(viewportPageStep(m.viewport.Height))
+			return m, nil
+		}
+	case isPageDownKey(msg):
+		if m.screen == screenChat && !m.sessionsOpen && !m.commandOpen && !m.helpOpen {
+			m.viewport.LineDown(viewportPageStep(m.viewport.Height))
+			return m, nil
 		}
 	}
 
-	header := m.renderHeader()
-	footer := m.renderFooter()
-	bodyHeight := m.height - lipgloss.Height(header) - lipgloss.Height(footer)
-	if bodyHeight < 6 {
-		bodyHeight = 6
-	}
-
-	mainWidth := m.chatPanelWidth()
-	body := panelStyle.Width(mainWidth).Height(bodyHeight).Render(m.renderMainPanel())
-
-	base := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
-	switch {
-	case m.helpOpen:
-		return renderModal(m.width, m.height, m.renderHelpModal())
-	case m.sessionsOpen:
-		return renderModal(m.width, m.height, m.renderSessionsModal())
-	case m.commandOpen:
-		return renderModal(m.width, m.height, m.renderCommandPalette())
-	default:
-		return base
-	}
-}
-
-func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		if m.approval != nil {
@@ -443,53 +449,7 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.commandOpen {
-		switch msg.String() {
-		case "esc":
-			if m.commandGroup != "" {
-				m.commandGroup = ""
-				m.commandCursor = 0
-				m.setInputValue("/")
-				return m, nil
-			}
-			m.commandOpen = false
-			return m, nil
-		case "up", "k":
-			if m.commandCursor > 0 {
-				m.commandCursor--
-			}
-			return m, nil
-		case "down", "j":
-			items := m.filteredCommands()
-			if m.commandCursor < len(items)-1 {
-				m.commandCursor++
-			}
-			return m, nil
-		case "enter":
-			items := m.filteredCommands()
-			if len(items) == 0 {
-				return m, nil
-			}
-			selected := items[m.commandCursor]
-			if selected.Kind == "group" {
-				m.commandGroup = selected.Group
-				m.commandCursor = 0
-				m.setInputValue("/")
-				m.statusNote = selected.Description
-				return m, nil
-			}
-			m.commandOpen = false
-			if shouldExecuteFromPalette(selected) {
-				m.input.Reset()
-				if err := m.handleSlashCommand(selected.Name); err != nil {
-					m.statusNote = err.Error()
-				}
-				m.refreshViewport()
-				return m, m.loadSessionsCmd()
-			}
-			m.setInputValue(selected.Usage)
-			m.statusNote = selected.Description
-			return m, nil
-		}
+		return m.handleCommandPaletteKey(msg)
 	}
 
 	if m.sessionsOpen {
@@ -581,6 +541,103 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m model) handleCommandPaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	items := m.filteredCommands()
+	switch {
+	case isPageUpKey(msg):
+		if len(items) > 0 {
+			m.commandCursor = max(0, m.commandCursor-commandPageSize)
+		}
+		return m, nil
+	case isPageDownKey(msg):
+		if len(items) > 0 {
+			m.commandCursor = min(len(items)-1, m.commandCursor+commandPageSize)
+		}
+		return m, nil
+	}
+
+	switch msg.String() {
+	case "esc":
+		m.closeCommandPalette()
+		return m, nil
+	case "up", "k":
+		if len(items) > 0 {
+			m.commandCursor = max(0, m.commandCursor-1)
+		}
+		return m, nil
+	case "down", "j":
+		if len(items) > 0 {
+			m.commandCursor = min(len(items)-1, m.commandCursor+1)
+		}
+		return m, nil
+	case "enter":
+		selected, ok := m.selectedCommandItem()
+		if !ok {
+			value := strings.TrimSpace(m.input.Value())
+			if value == "" {
+				return m, nil
+			}
+			if value == "/quit" {
+				m.closeCommandPalette()
+				return m, tea.Quit
+			}
+			m.closeCommandPalette()
+			m.input.Reset()
+			if err := m.handleSlashCommand(value); err != nil {
+				m.statusNote = err.Error()
+			}
+			m.refreshViewport()
+			return m, m.loadSessionsCmd()
+		}
+		m.closeCommandPalette()
+		if shouldExecuteFromPalette(selected) {
+			if selected.Name == "/quit" {
+				return m, tea.Quit
+			}
+			m.input.Reset()
+			if err := m.handleSlashCommand(selected.Name); err != nil {
+				m.statusNote = err.Error()
+			}
+			m.refreshViewport()
+			return m, m.loadSessionsCmd()
+		}
+		m.setInputValue(selected.Usage)
+		m.statusNote = selected.Description
+		return m, nil
+	}
+
+	before := m.input.Value()
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	if m.input.Value() != before {
+		m.noteInputMutation(before, m.input.Value(), msg.String())
+		m.syncCommandPalette()
+	}
+	return m, cmd
+}
+
+func (m *model) openCommandPalette() {
+	m.commandOpen = true
+	m.commandCursor = 0
+	m.setInputValue("/")
+	m.syncCommandPalette()
+}
+
+func (m *model) closeCommandPalette() {
+	m.commandOpen = false
+	m.commandCursor = 0
+	m.input.Reset()
+}
+
+func (m model) selectedCommandItem() (commandItem, bool) {
+	items := m.filteredCommands()
+	if len(items) == 0 {
+		return commandItem{}, false
+	}
+	index := clamp(m.commandCursor, 0, len(items)-1)
+	return items[index], true
+}
+
 func (m *model) noteInputMutation(before, after, source string) {
 	now := time.Now()
 	delta := len(after) - len(before)
@@ -625,7 +682,7 @@ func (m model) submitPrompt(value string) (tea.Model, tea.Cmd) {
 	})
 	m.chatItems = append(m.chatItems, chatEntry{
 		Kind:   "assistant",
-		Title:  "AICoding",
+		Title:  assistantLabel,
 		Body:   m.thinkingText(),
 		Status: "pending",
 	})
@@ -652,14 +709,27 @@ func (m *model) handleAgentEvent(event agent.Event) {
 	case agent.EventToolCallStarted:
 		m.phase = "tool"
 		m.llmConnected = true
+		m.finalizeAssistantTurnForTool(event.ToolName)
+		m.appendChat(chatEntry{
+			Kind:   "tool",
+			Title:  "Tool Call | " + event.ToolName,
+			Body:   "params: " + summarizeArgs(event.ToolArguments),
+			Status: "running",
+		})
 		m.toolRuns = append(m.toolRuns, toolRun{
 			Name:    event.ToolName,
-			Summary: "Running with " + summarizeArgs(event.ToolArguments),
+			Summary: "params: " + summarizeArgs(event.ToolArguments),
 			Status:  "running",
 		})
 		m.statusNote = "Running tool: " + event.ToolName
 	case agent.EventToolCallCompleted:
 		summary, lines, status := summarizeTool(event.ToolName, event.ToolResult)
+		m.appendChat(chatEntry{
+			Kind:   "tool",
+			Title:  "Tool Result | " + event.ToolName,
+			Body:   joinSummary(summary, lines),
+			Status: status,
+		})
 		if len(m.toolRuns) > 0 {
 			index := len(m.toolRuns) - 1
 			m.toolRuns[index].Summary = summary
@@ -699,7 +769,7 @@ func (m *model) appendAssistantDelta(delta string) {
 	}
 	m.chatItems = append(m.chatItems, chatEntry{
 		Kind:   "assistant",
-		Title:  "AICoding",
+		Title:  assistantLabel,
 		Body:   delta,
 		Status: "streaming",
 	})
@@ -726,7 +796,7 @@ func (m *model) finishAssistantMessage(content string) {
 	}
 	m.chatItems = append(m.chatItems, chatEntry{
 		Kind:   "assistant",
-		Title:  "AICoding",
+		Title:  assistantLabel,
 		Body:   content,
 		Status: "final",
 	})
@@ -734,6 +804,74 @@ func (m *model) finishAssistantMessage(content string) {
 
 func (m *model) appendChat(item chatEntry) {
 	m.chatItems = append(m.chatItems, item)
+}
+
+func (m *model) finalizeAssistantTurnForTool(toolName string) {
+	if m.streamingIndex >= 0 && m.streamingIndex < len(m.chatItems) {
+		item := &m.chatItems[m.streamingIndex]
+		if item.Kind == "assistant" {
+			if item.Status == "pending" || item.Body == m.thinkingText() || strings.TrimSpace(item.Body) == "" {
+				item.Body = assistantToolIntro(toolName)
+			}
+			item.Status = "final"
+			m.streamingIndex = -1
+			return
+		}
+	}
+	if len(m.chatItems) > 0 {
+		last := &m.chatItems[len(m.chatItems)-1]
+		if last.Kind == "assistant" {
+			return
+		}
+	}
+	m.appendChat(chatEntry{
+		Kind:   "assistant",
+		Title:  assistantLabel,
+		Body:   assistantToolIntro(toolName),
+		Status: "final",
+	})
+}
+
+func (m *model) appendAssistantToolFollowUp(toolName, summary, status string) {
+	step := assistantToolFollowUp(toolName, summary, status)
+	if step == "" {
+		return
+	}
+	if len(m.chatItems) > 0 {
+		last := &m.chatItems[len(m.chatItems)-1]
+		if last.Kind == "assistant" && strings.TrimSpace(last.Body) == step {
+			last.Status = "final"
+			return
+		}
+	}
+	m.appendChat(chatEntry{
+		Kind:   "assistant",
+		Title:  assistantLabel,
+		Body:   step,
+		Status: "final",
+	})
+}
+
+func (m *model) finishLatestToolCall(name, body, status string) {
+	title := "Tool Call | " + name
+	for i := len(m.chatItems) - 1; i >= 0; i-- {
+		if m.chatItems[i].Kind != "tool" {
+			continue
+		}
+		if m.chatItems[i].Title != title && strings.TrimSpace(name) != "" {
+			continue
+		}
+		m.chatItems[i].Title = title
+		m.chatItems[i].Body = body
+		m.chatItems[i].Status = status
+		return
+	}
+	m.appendChat(chatEntry{
+		Kind:   "tool",
+		Title:  title,
+		Body:   body,
+		Status: status,
+	})
 }
 
 func (m *model) updateThinkingCard() {
@@ -755,7 +893,7 @@ func (m *model) failLatestAssistant(errText string) {
 	if len(m.chatItems) == 0 {
 		m.appendChat(chatEntry{
 			Kind:   "assistant",
-			Title:  "AICoding",
+			Title:  assistantLabel,
 			Body:   "Request failed: " + errText,
 			Status: "error",
 		})
@@ -770,7 +908,7 @@ func (m *model) failLatestAssistant(errText string) {
 	}
 	m.appendChat(chatEntry{
 		Kind:   "assistant",
-		Title:  "AICoding",
+		Title:  assistantLabel,
 		Body:   "Request failed: " + errText,
 		Status: "error",
 	})
@@ -793,6 +931,28 @@ func (m *model) resize() {
 	m.refreshViewport()
 }
 
+func (m model) View() string {
+	base := m.renderLanding()
+	if m.screen == screenChat {
+		mainPanel := panelStyle.Width(m.chatPanelWidth()).Render(m.renderMainPanel())
+		base = lipgloss.JoinVertical(
+			lipgloss.Left,
+			m.renderHeader(),
+			mainPanel,
+			m.renderFooter(),
+		)
+	}
+
+	switch {
+	case m.helpOpen:
+		return renderModal(m.width, m.height, m.renderHelpModal())
+	case m.sessionsOpen:
+		return renderModal(m.width, m.height, m.renderSessionsModal())
+	default:
+		return base
+	}
+}
+
 func (m model) renderConversation() string {
 	if len(m.chatItems) == 0 {
 		return mutedStyle.Render("No messages yet. Start with an instruction like \"analyze this repo\" or \"implement a TUI shell\".")
@@ -800,9 +960,6 @@ func (m model) renderConversation() string {
 	width := max(24, m.viewport.Width)
 	blocks := make([]string, 0, len(m.chatItems))
 	for _, item := range m.chatItems {
-		if item.Kind == "tool" {
-			continue
-		}
 		blocks = append(blocks, renderChatRow(item, width))
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, blocks...)
@@ -850,13 +1007,18 @@ func (m model) renderLanding() string {
 		"/____/\\_, /\\__/\\__/ /_/  /_/_/_//_/\\_,_/_.__/",
 		"     /___/",
 	}, "\n"))
-	title := landingTitleStyle.Render("AICoding Chat")
+	title := landingTitleStyle.Render(chatTitleLabel)
 	subtitle := mutedStyle.Render("Start with a prompt below. Press Enter to open the full conversation workspace.")
 	inputBox := landingInputStyle.Copy().
 		BorderForeground(colorAccent).
 		Width(m.landingInputShellWidth()).
 		Render(m.input.View())
-	content := lipgloss.JoinVertical(lipgloss.Center, logo, "", title, subtitle, "", inputBox, "", mutedStyle.Render("Type / for supported commands, Ctrl+C to quit."))
+	parts := []string{logo, "", title, subtitle, ""}
+	if m.commandOpen {
+		parts = append(parts, m.renderCommandPalette(), "")
+	}
+	parts = append(parts, inputBox, "", mutedStyle.Render("Type / for supported commands, Ctrl+C to quit."))
+	content := lipgloss.JoinVertical(lipgloss.Center, parts...)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
@@ -873,7 +1035,7 @@ func (m model) renderHeader() string {
 		statusValue = m.spinner.View() + " " + state
 	}
 
-	left := titleStyle.Render("AICoding TUI")
+	left := titleStyle.Render(tuiTitleLabel)
 	right := lipgloss.JoinHorizontal(
 		lipgloss.Left,
 		tagStyle.Render(filepath.Base(m.workspace)),
@@ -887,20 +1049,29 @@ func (m model) renderHeader() string {
 	)
 	line := lipgloss.JoinHorizontal(lipgloss.Center, left, spacer(max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right)-4)), right)
 
-	subtitle := subtleBorderStyle.Render(
+	subtitleWidth := max(16, m.width-subtleBorderStyle.GetHorizontalFrameSize())
+	subtitleText := compact(
 		fmt.Sprintf("session %s | workspace %s | %s", shortID(m.sess.ID), filepath.Base(m.sess.Workspace), m.statusNote),
+		subtitleWidth,
 	)
+	subtitle := subtleBorderStyle.
+		Width(max(1, m.width)).
+		MaxHeight(1).
+		Render(subtitleText)
 	return lipgloss.JoinVertical(lipgloss.Left, line, subtitle)
 }
 
 func (m model) renderFooter() string {
-	hint := mutedStyle.Render("Type / for commands  -  ? help  -  Mouse wheel scroll  -  Enter send  -  Ctrl+N new session  -  Ctrl+L sessions  -  Ctrl+C quit")
+	hint := mutedStyle.Render("Type / for commands  -  ? help  -  Mouse wheel / PgUp / PgDn scroll  -  Enter send  -  Ctrl+N new session  -  Ctrl+L sessions  -  Ctrl+C quit")
 	inputBorder := m.inputBorderStyle().
 		Width(m.chatPanelInnerWidth()).
 		Render(m.input.View())
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 4)
 	if m.approval != nil {
 		parts = append(parts, m.renderApprovalBanner())
+	}
+	if m.commandOpen {
+		parts = append(parts, m.renderCommandPalette())
 	}
 	parts = append(parts, inputBorder, mutedStyle.Width(m.chatPanelInnerWidth()).Render(hint))
 	content := lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -950,33 +1121,39 @@ func (m model) renderApprovalBanner() string {
 }
 
 func (m model) renderCommandPalette() string {
+	width := m.commandPaletteWidth()
 	items := m.filteredCommands()
-	title := "命令选择器"
-	hint := "使用上下方向键选择，按 Enter 插入，按 Esc 关闭。"
-	if m.commandGroup != "" {
-		title = "命令选择器 / " + m.commandGroup
-		hint = "使用上下方向键选择，按 Enter 插入，按 Esc 返回上一级。"
-	}
-	lines := []string{
-		modalTitleStyle.Render(title),
-		mutedStyle.Render(hint),
-		mutedStyle.Render("只展示当前真正支持的命令，并按层级收纳。"),
-		"",
-	}
 	if len(items) == 0 {
-		lines = append(lines, mutedStyle.Render("没有匹配当前输入的命令。"))
-	} else {
-		for i, item := range items {
-			rowStyle := lipgloss.NewStyle()
-			if i == m.commandCursor {
-				rowStyle = rowStyle.Foreground(colorAccent).Bold(true)
-			}
-			lines = append(lines, rowStyle.Render(item.Usage))
-			lines = append(lines, mutedStyle.Render("  "+item.Description))
-			lines = append(lines, "")
-		}
+		return commandPaletteStyle.Width(width).Render(
+			commandPaletteMetaStyle.Width(max(1, width-commandPaletteStyle.GetHorizontalFrameSize())).Render("No matching commands."),
+		)
 	}
-	return modalBoxStyle.BorderForeground(colorAccent).Width(min(96, max(60, m.width-16))).Render(strings.Join(lines, "\n"))
+
+	selected, _ := m.selectedCommandItem()
+	nameWidth := min(26, max(14, width/4))
+	descWidth := max(12, width-commandPaletteStyle.GetHorizontalFrameSize()-nameWidth-4)
+	rows := make([]string, 0, commandPageSize+1)
+	for _, item := range m.visibleCommandItemsPage() {
+		rowStyle := commandPaletteRowStyle
+		nameStyle := commandPaletteNameStyle
+		descStyle := commandPaletteDescStyle
+		if item.Name == selected.Name {
+			rowStyle = commandPaletteSelectedRowStyle
+			nameStyle = commandPaletteSelectedNameStyle
+			descStyle = commandPaletteSelectedDescStyle
+		}
+
+		name := nameStyle.Width(nameWidth).Render(item.Usage)
+		desc := descStyle.Width(descWidth).Render(compact(item.Description, max(12, descWidth)))
+		rows = append(rows, rowStyle.Width(max(1, width-commandPaletteStyle.GetHorizontalFrameSize())).Render(
+			lipgloss.JoinHorizontal(lipgloss.Top, name, "  ", desc),
+		))
+	}
+	for len(rows) < commandPageSize {
+		rows = append(rows, commandPaletteRowStyle.Width(max(1, width-commandPaletteStyle.GetHorizontalFrameSize())).Render(""))
+	}
+	rows = append(rows, commandPaletteMetaStyle.Render("Up/Down move  PgUp/PgDn page  Enter run  Esc close"))
+	return commandPaletteStyle.Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, rows...))
 }
 
 func (m *model) handleSlashCommand(input string) error {
@@ -989,30 +1166,9 @@ func (m *model) handleSlashCommand(input string) error {
 	case "/help":
 		m.screen = screenChat
 		m.appendChat(chatEntry{Kind: "user", Title: "You", Body: input, Status: "final"})
-		m.appendChat(chatEntry{Kind: "assistant", Title: "AICoding", Body: m.helpText(), Status: "final"})
+		m.appendChat(chatEntry{Kind: "assistant", Title: assistantLabel, Body: m.helpText(), Status: "final"})
 		m.statusNote = "已在聊天区显示帮助说明。"
 		return nil
-	case "/session":
-		m.screen = screenChat
-		m.appendChat(chatEntry{Kind: "user", Title: "You", Body: input, Status: "final"})
-		m.appendChat(chatEntry{Kind: "assistant", Title: "AICoding", Body: m.sessionText(), Status: "final"})
-		m.statusNote = fmt.Sprintf("session %s in %s", m.sess.ID, m.sess.Workspace)
-		return nil
-	case "/sessions":
-		if len(fields) > 1 {
-			limit, err := strconv.Atoi(fields[1])
-			if err != nil || limit <= 0 {
-				return fmt.Errorf("/sessions limit must be a positive integer")
-			}
-			m.sessionLimit = limit
-		}
-		m.sessionsOpen = true
-		return nil
-	case "/resume":
-		if len(fields) < 2 {
-			return fmt.Errorf("usage: /resume <id>")
-		}
-		return m.resumeSession(fields[1])
 	case "/new":
 		return m.newSession()
 	default:
@@ -1098,7 +1254,7 @@ func rebuildSessionTimeline(sess *session.Session) ([]chatEntry, []toolRun) {
 				callNames[call.ID] = call.Function.Name
 			}
 			if strings.TrimSpace(message.Content) != "" {
-				items = append(items, chatEntry{Kind: "assistant", Title: "AICoding", Body: message.Content, Status: "final"})
+				items = append(items, chatEntry{Kind: "assistant", Title: assistantLabel, Body: message.Content, Status: "final"})
 			}
 		case "tool":
 			name := callNames[message.ToolCallID]
@@ -1535,41 +1691,51 @@ func summarizeArgs(raw string) string {
 	return compact(raw, 88)
 }
 
+func assistantToolIntro(toolName string) string {
+	if strings.TrimSpace(toolName) == "" {
+		return "我先查看一下相关内容。"
+	}
+	return fmt.Sprintf("我先调用 `%s` 看一下相关内容。", toolName)
+}
+
+func assistantToolFollowUp(toolName, summary, status string) string {
+	if strings.TrimSpace(summary) == "" {
+		return "我拿到工具结果了，继续整理一下。"
+	}
+	switch status {
+	case "error", "warn":
+		return fmt.Sprintf("`%s` 已返回结果，我先根据这个情况继续判断。", toolName)
+	default:
+		return fmt.Sprintf("`%s` 已经执行完了，我继续往下整理。", toolName)
+	}
+}
+
 func (m model) thinkingText() string {
 	return fmt.Sprintf("%s Thinking... request already sent to the LLM, waiting for response.", m.spinner.View())
 }
 
 func (m *model) syncCommandPalette() {
 	value := strings.TrimSpace(m.input.Value())
-	if strings.HasPrefix(value, "/") {
-		m.commandOpen = true
-		if inferred := inferCommandGroup(value); inferred != "" {
-			m.commandGroup = inferred
-		} else if value != "/" {
-			m.commandGroup = ""
-		}
-		items := m.filteredCommands()
-		if len(items) == 0 {
-			m.commandCursor = 0
-		} else if m.commandCursor >= len(items) {
-			m.commandCursor = len(items) - 1
-		}
+	if !strings.HasPrefix(value, "/") {
+		m.commandOpen = false
+		m.commandCursor = 0
 		return
 	}
-	m.commandOpen = false
-	m.commandGroup = ""
-	m.commandCursor = 0
+	m.commandOpen = true
+	items := m.filteredCommands()
+	if len(items) == 0 {
+		m.commandCursor = 0
+		return
+	}
+	if m.commandCursor < 0 || m.commandCursor >= len(items) {
+		m.commandCursor = 0
+	}
 }
 
 func (m model) filteredCommands() []commandItem {
 	value := strings.TrimSpace(m.input.Value())
-	group := m.commandGroup
-	if group == "" {
-		group = inferCommandGroup(value)
-	}
-
-	items := visibleCommandItems(group)
-	query := commandFilterQuery(value, group)
+	query := commandFilterQuery(value, "")
+	items := visibleCommandItems("")
 	if query == "" {
 		return items
 	}
@@ -1583,6 +1749,26 @@ func (m model) filteredCommands() []commandItem {
 	return result
 }
 
+func (m model) commandPaletteWidth() int {
+	switch m.screen {
+	case screenLanding:
+		return max(28, m.landingInputShellWidth())
+	default:
+		return max(32, m.chatPanelInnerWidth())
+	}
+}
+
+func (m model) visibleCommandItemsPage() []commandItem {
+	items := m.filteredCommands()
+	if len(items) == 0 {
+		return nil
+	}
+	cursor := clamp(m.commandCursor, 0, len(items)-1)
+	start := (cursor / commandPageSize) * commandPageSize
+	end := min(len(items), start+commandPageSize)
+	return items[start:end]
+}
+
 func (m *model) setInputValue(value string) {
 	m.input.SetValue(value)
 	m.input.CursorEnd()
@@ -1590,7 +1776,7 @@ func (m *model) setInputValue(value string) {
 
 func shouldExecuteFromPalette(item commandItem) bool {
 	switch item.Name {
-	case "/help":
+	case "/help", "/new", "/quit":
 		return true
 	default:
 		return false
@@ -1607,9 +1793,6 @@ func (m model) helpText() string {
 		"",
 		"斜杠命令",
 		"/help: 查看帮助说明。",
-		"/session: 查看当前会话 ID、工作区和更新时间。",
-		"/sessions [limit]: 查看最近的历史会话列表。",
-		"/resume <id>: 按完整 ID 或前缀恢复一个会话。",
 		"/new: 新建一个会话。",
 		"/quit: 退出 TUI。",
 		"",
@@ -1635,17 +1818,6 @@ func visibleCommandItems(group string) []commandItem {
 		}
 	}
 	return items
-}
-
-func inferCommandGroup(value string) string {
-	switch {
-	case strings.HasPrefix(value, "/session"),
-		strings.HasPrefix(value, "/sessions"),
-		strings.HasPrefix(value, "/resume"):
-		return "session"
-	default:
-		return ""
-	}
 }
 
 func commandFilterQuery(value, group string) string {
@@ -1704,7 +1876,7 @@ func (m model) inputBorderStyle() lipgloss.Style {
 
 func (m *model) syncInputStyle() {
 	if m.screen == screenLanding {
-		m.input.Placeholder = "Ask AICoding to inspect, change, or verify this workspace..."
+		m.input.Placeholder = "Ask Bytemind to inspect, change, or verify this workspace..."
 	} else {
 		m.input.Placeholder = "Continue the conversation..."
 	}
@@ -1814,13 +1986,13 @@ func compact(text string, limit int) string {
 	if text == "" {
 		return ""
 	}
-	if limit <= 0 || len(text) <= limit {
+	if limit <= 0 || runewidth.StringWidth(text) <= limit {
 		return text
 	}
-	if limit <= 3 {
-		return text[:limit]
+	if limit <= runewidth.StringWidth("...") {
+		return runewidth.Truncate(text, limit, "")
 	}
-	return text[:limit-3] + "..."
+	return runewidth.Truncate(text, limit, "...")
 }
 
 func emptyDot(path string) string {

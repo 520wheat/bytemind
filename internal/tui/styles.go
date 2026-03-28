@@ -6,6 +6,7 @@ var (
 	colorPanel   = lipgloss.Color("#0F1720")
 	colorBorder  = lipgloss.Color("#314156")
 	colorAccent  = lipgloss.Color("#7DD3FC")
+	colorHotPink = lipgloss.Color("#F05AA6")
 	colorUser    = lipgloss.Color("#F6AD7B")
 	colorTool    = lipgloss.Color("#F9D67A")
 	colorMuted   = lipgloss.Color("#93A4B8")
@@ -136,6 +137,40 @@ var (
 				BorderForeground(colorTool).
 				Background(lipgloss.Color("#17140D")).
 				Padding(0, 1)
+
+	commandPaletteStyle = lipgloss.NewStyle().
+				Background(colorPanel).
+				BorderStyle(lipgloss.NormalBorder()).
+				BorderTop(true).
+				BorderLeft(true).
+				BorderRight(true).
+				BorderBottom(false).
+				BorderForeground(colorBorder).
+				Padding(0, 1)
+
+	commandPaletteRowStyle = lipgloss.NewStyle().
+				Background(lipgloss.Color("#0B1118")).
+				Padding(0, 1)
+
+	commandPaletteSelectedRowStyle = lipgloss.NewStyle().
+					Background(lipgloss.Color("#231421")).
+					Padding(0, 1)
+
+	commandPaletteNameStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#B7C4FF"))
+
+	commandPaletteSelectedNameStyle = lipgloss.NewStyle().
+					Foreground(colorHotPink).
+					Bold(true)
+
+	commandPaletteDescStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#A9B7C6"))
+
+	commandPaletteSelectedDescStyle = lipgloss.NewStyle().
+					Foreground(lipgloss.Color("#F7D9EA"))
+
+	commandPaletteMetaStyle = lipgloss.NewStyle().
+				Foreground(colorMuted)
 
 	modalBoxStyle = lipgloss.NewStyle().
 			Background(colorPanel).
