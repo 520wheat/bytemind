@@ -180,6 +180,33 @@ func TestWindowSizeMsgUpdatesViewportDimensions(t *testing.T) {
 	}
 }
 
+func TestSubmitPromptRecomputesInputWidthWhenEnteringChat(t *testing.T) {
+	input := textarea.New()
+	input.Focus()
+
+	m := model{
+		screen:    screenLanding,
+		width:     120,
+		height:    36,
+		input:     input,
+		sess:      session.New("E:\\bytemind"),
+		workspace: "E:\\bytemind",
+	}
+	m.syncLayoutForCurrentScreen()
+	beforeWidth := lipgloss.Width(m.input.View())
+
+	got, _ := m.submitPrompt("hello from landing")
+	updated := got.(model)
+	afterWidth := lipgloss.Width(updated.input.View())
+
+	if updated.screen != screenChat {
+		t.Fatalf("expected submit prompt to switch to chat screen")
+	}
+	if afterWidth <= beforeWidth {
+		t.Fatalf("expected chat input width to expand after screen switch, got %d -> %d", beforeWidth, afterWidth)
+	}
+}
+
 func TestRenderHeaderKeepsStableHeightWithLongStatusNote(t *testing.T) {
 	m := model{
 		width:      100,

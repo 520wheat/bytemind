@@ -691,7 +691,7 @@ func (m model) submitPrompt(value string) (tea.Model, tea.Cmd) {
 	m.phase = "thinking"
 	m.llmConnected = true
 	m.busy = true
-	m.syncInputStyle()
+	m.syncLayoutForCurrentScreen()
 	m.refreshViewport()
 	return m, tea.Batch(m.startRunCmd(value), m.spinner.Tick, waitForAsync(m.async))
 }
@@ -920,18 +920,33 @@ func (m *model) refreshViewport() {
 	m.viewport.GotoBottom()
 }
 
-func (m *model) resize() {
-	if m.screen == screenLanding {
-		m.input.SetWidth(m.landingInputContentWidth())
-	} else {
-		m.input.SetWidth(m.chatInputContentWidth())
+func (m *model) syncLayoutForCurrentScreen() {
+	if m.width > 0 {
+		if m.screen == screenLanding {
+			m.input.SetWidth(m.landingInputContentWidth())
+		} else {
+			m.input.SetWidth(m.chatInputContentWidth())
+		}
 	}
 	m.syncInputStyle()
 	m.syncViewportSize()
+}
+
+func (m *model) resize() {
+	m.syncLayoutForCurrentScreen()
 	m.refreshViewport()
 }
 
 func (m model) View() string {
+	if m.width > 0 {
+		if m.screen == screenLanding {
+			m.input.SetWidth(m.landingInputContentWidth())
+			m.syncInputStyle()
+		} else {
+			m.input.SetWidth(m.chatInputContentWidth())
+			m.syncInputStyle()
+		}
+	}
 	base := m.renderLanding()
 	if m.screen == screenChat {
 		mainPanel := panelStyle.Width(m.chatPanelWidth()).Render(m.renderMainPanel())
@@ -1189,7 +1204,7 @@ func (m *model) newSession() error {
 	m.streamingIndex = -1
 	m.statusNote = "Started a new session."
 	m.input.Reset()
-	m.syncInputStyle()
+	m.syncLayoutForCurrentScreen()
 	m.refreshViewport()
 	return nil
 }
@@ -1212,7 +1227,7 @@ func (m *model) resumeSession(prefix string) error {
 	m.chatItems, m.toolRuns = rebuildSessionTimeline(next)
 	m.streamingIndex = -1
 	m.statusNote = "Resumed session " + shortID(next.ID)
-	m.syncInputStyle()
+	m.syncLayoutForCurrentScreen()
 	m.refreshViewport()
 	return nil
 }
