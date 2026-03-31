@@ -395,13 +395,14 @@ func (m model) mouseOverLandingInput(y int) bool {
 		return false
 	}
 	logoHeight := lipgloss.Height(landingLogoStyle.Render(strings.Join([]string{
-		"   ___       __        __  ___ _           __",
-		"  / _ )__ __/ /____   /  |/  (_)__  ___ _/ /",
-		" / _  / // / __/ -_) / /|_/ / / _ \\/ _ `/ _ \\",
-		"/____/\\_, /\\__/\\__/ /_/  /_/_/_//_/\\_,_/_.__/",
-		"     /___/",
+		"    ____        __                      _           __",
+		"   / __ )__  __/ /____  ____ ___  ____(_)___  ____/ /",
+		"  / __  / / / / __/ _ \\/ __ `__ \\/ __/ / __ \\/ __  / ",
+		" / /_/ / /_/ / /_/  __/ / / / / / /_/ / / / / /_/ /  ",
+		"/_____/\\__, /\\__/\\___/_/ /_/ /_/\\__/_/_/ /_/\\__,_/   ",
+		"      /____/                                          ",
 	}, "\n")))
-	titleHeight := lipgloss.Height(landingTitleStyle.Render(chatTitleLabel))
+	titleHeight := 0
 	subtitleHeight := 0
 	inputHeight := lipgloss.Height(
 		landingInputStyle.Copy().
@@ -1044,18 +1045,18 @@ func (m model) renderMainPanel() string {
 
 func (m model) renderLanding() string {
 	logo := landingLogoStyle.Render(strings.Join([]string{
-		"   ___       __        __  ___ _           __",
-		"  / _ )__ __/ /____   /  |/  (_)__  ___ _/ /",
-		" / _  / // / __/ -_) / /|_/ / / _ \\/ _ `/ _ \\",
-		"/____/\\_, /\\__/\\__/ /_/  /_/_/_//_/\\_,_/_.__/",
-		"     /___/",
+		"    ____        __                      _           __",
+		"   / __ )__  __/ /____  ____ ___  ____(_)___  ____/ /",
+		"  / __  / / / / __/ _ \\/ __ `__ \\/ __/ / __ \\/ __  / ",
+		" / /_/ / /_/ / /_/  __/ / / / / / /_/ / / / / /_/ /  ",
+		"/_____/\\__, /\\__/\\___/_/ /_/ /_/\\__/_/_/ /_/\\__,_/   ",
+		"      /____/                                          ",
 	}, "\n"))
-	title := landingTitleStyle.Render(chatTitleLabel)
 	inputBox := landingInputStyle.Copy().
 		BorderForeground(m.modeAccentColor()).
 		Width(m.landingInputShellWidth()).
 		Render(m.input.View())
-	parts := []string{logo, "", title, "", m.renderModeTabs(), ""}
+	parts := []string{logo, "", m.renderModeTabs(), ""}
 	if m.commandOpen {
 		parts = append(parts, m.renderCommandPalette(), "")
 	}

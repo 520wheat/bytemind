@@ -25,7 +25,8 @@ var (
 
 	landingLogoStyle = lipgloss.NewStyle().
 				Foreground(colorAccent).
-				Bold(true)
+				Bold(true).
+				Align(lipgloss.Center)
 
 	landingTitleStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#E2E8F0")).

@@ -690,7 +690,7 @@ func TestLandingViewRendersCommandPaletteAboveInput(t *testing.T) {
 	m.syncCommandPalette()
 
 	view := m.View()
-	if !strings.Contains(view, "Bytemind Chat") {
+	if !strings.Contains(view, "Build") || !strings.Contains(view, "Plan") {
 		t.Fatalf("expected landing view to remain visible, got %q", view)
 	}
 	if !strings.Contains(view, "/help") {
