@@ -1161,7 +1161,8 @@ func (m *model) syncViewportSize() {
 		bodyHeight = 6
 	}
 	panelInnerWidth := m.chatPanelInnerWidth()
-	panelInnerHeight := max(4, bodyHeight-panelStyle.GetVerticalFrameSize())
+	statusHeight := lipgloss.Height(m.renderStatusBar())
+	panelInnerHeight := max(4, bodyHeight-panelStyle.GetVerticalFrameSize()-statusHeight-1)
 	extraHeight := 0
 	if m.hasPlanPanel() {
 		planInnerWidth := m.planPanelWidth() - modalBoxStyle.GetHorizontalFrameSize()
@@ -1183,15 +1184,19 @@ func (m *model) syncViewportSize() {
 }
 
 func (m model) renderMainPanel() string {
+	statusBar := m.renderStatusBar()
 	if !m.hasPlanPanel() {
-		return m.viewport.View()
+		return lipgloss.JoinVertical(lipgloss.Left, statusBar, "", m.viewport.View())
 	}
+	var content string
 	if m.showPlanSidebar() {
 		conversation := lipgloss.NewStyle().Width(m.conversationPanelWidth()).Render(m.viewport.View())
 		planPanel := m.renderPlanPanel(m.planPanelWidth())
-		return lipgloss.JoinHorizontal(lipgloss.Top, conversation, spacer(1), planPanel)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, conversation, spacer(1), planPanel)
+	} else {
+		content = lipgloss.JoinVertical(lipgloss.Left, m.renderPlanPanel(m.chatPanelInnerWidth()), "", m.viewport.View())
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, m.renderPlanPanel(m.chatPanelInnerWidth()), "", m.viewport.View())
+	return lipgloss.JoinVertical(lipgloss.Left, statusBar, "", content)
 }
 
 func (m model) renderLanding() string {
@@ -1294,6 +1299,24 @@ func (m model) renderApprovalBanner() string {
 		mutedStyle.Render("Y / Enter approve    N / Esc reject"),
 	}
 	return approvalBannerStyle.Width(width).Render(strings.Join(lines, "\n"))
+}
+
+func (m model) renderStatusBar() string {
+	width := max(24, m.chatPanelInnerWidth())
+	stepTitle := currentOrNextStepTitle(m.plan)
+	if stepTitle == "" {
+		stepTitle = "-"
+	}
+	items := []string{
+		"Mode: " + strings.ToUpper(string(m.mode)),
+		"Phase: " + m.currentPhaseLabel(),
+		"Session: " + m.currentSessionLabel(),
+		"Step: " + stepTitle,
+		"Follow: " + m.autoFollowLabel(),
+		"Model: " + m.currentModelLabel(),
+	}
+	line := compact(strings.Join(items, "  |  "), width)
+	return statusBarStyle.Width(width).Render(line)
 }
 
 func (m model) renderCommandPalette() string {
@@ -1404,13 +1427,6 @@ func (m *model) resumeSession(prefix string) error {
 	m.chatItems, m.toolRuns = rebuildSessionTimeline(next)
 	m.streamingIndex = -1
 	m.statusNote = "Resumed session " + shortID(next.ID)
-	if planpkg.HasStructuredPlan(m.plan) {
-		if m.mode == modeBuild && canContinuePlan(m.plan) {
-			m.statusNote += ". Type 'continue execution' to keep executing the saved plan."
-		} else if m.mode == modePlan {
-			m.statusNote += ". Type 'continue execution' when you are ready to execute the saved plan."
-		}
-	}
 	m.chatAutoFollow = true
 	if m.width > 0 && m.height > 0 {
 		m.syncLayoutForCurrentScreen()
@@ -2185,6 +2201,19 @@ func canContinuePlan(state planpkg.State) bool {
 	}
 }
 
+func currentOrNextStepTitle(state planpkg.State) string {
+	state = planpkg.NormalizeState(state)
+	if step, ok := planpkg.CurrentStep(state); ok && strings.TrimSpace(step.Title) != "" {
+		return strings.TrimSpace(step.Title)
+	}
+	for _, step := range state.Steps {
+		if planpkg.NormalizeStepStatus(string(step.Status)) == planpkg.StepPending && strings.TrimSpace(step.Title) != "" {
+			return strings.TrimSpace(step.Title)
+		}
+	}
+	return ""
+}
+
 func isContinueExecutionInput(input string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	switch normalized {
@@ -2193,6 +2222,37 @@ func isContinueExecutionInput(input string) bool {
 	default:
 		return false
 	}
+}
+
+func (m model) currentPhaseLabel() string {
+	if phase := m.planPhaseLabel(); phase != "none" {
+		return phase
+	}
+	if strings.TrimSpace(m.phase) != "" {
+		return strings.TrimSpace(m.phase)
+	}
+	return "idle"
+}
+
+func (m model) currentSessionLabel() string {
+	if m.sess == nil {
+		return "none"
+	}
+	return shortID(m.sess.ID)
+}
+
+func (m model) autoFollowLabel() string {
+	if m.chatAutoFollow {
+		return "auto"
+	}
+	return "manual"
+}
+
+func (m model) currentModelLabel() string {
+	if model := strings.TrimSpace(m.cfg.Provider.Model); model != "" {
+		return model
+	}
+	return "-"
 }
 
 func preparePlanForContinuation(state planpkg.State) (planpkg.State, error) {

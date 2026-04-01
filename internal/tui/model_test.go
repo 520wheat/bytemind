@@ -707,6 +707,39 @@ func TestRenderFooterOnlyShowsInputRegion(t *testing.T) {
 	}
 }
 
+func TestRenderStatusBarShowsCurrentRuntimeState(t *testing.T) {
+	m := model{
+		width:          200,
+		mode:           modeBuild,
+		phase:          "thinking",
+		chatAutoFollow: false,
+		cfg: config.Config{
+			Provider: config.ProviderConfig{Model: "deepseek-chat"},
+		},
+		sess: &session.Session{ID: "1234567890abcdef"},
+		plan: planpkg.State{
+			Phase: planpkg.PhaseExecuting,
+			Steps: []planpkg.Step{
+				{Title: "Implement plan resumption", Status: planpkg.StepInProgress},
+			},
+		},
+	}
+
+	bar := m.renderStatusBar()
+	for _, want := range []string{
+		"Mode: BUILD",
+		"Phase: executing",
+		"Session: 1234567890ab",
+		"Step: Implement plan resumption",
+		"Follow: manual",
+		"Model: deepseek-chat",
+	} {
+		if !strings.Contains(bar, want) {
+			t.Fatalf("expected status bar to contain %q", want)
+		}
+	}
+}
+
 func TestSyncInputStyleUsesSingleLineSearchField(t *testing.T) {
 	input := textarea.New()
 	m := model{
