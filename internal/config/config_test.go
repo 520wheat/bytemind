@@ -13,6 +13,7 @@ func TestLoadUsesEnvOverrides(t *testing.T) {
 	t.Setenv("BYTEMIND_MODEL", "override-model")
 	t.Setenv("BYTEMIND_API_KEY", "secret")
 	t.Setenv("BYTEMIND_PROVIDER_TYPE", "anthropic")
+	t.Setenv("BYTEMIND_PROVIDER_AUTO_DETECT_TYPE", "true")
 	t.Setenv("BYTEMIND_STREAM", "false")
 
 	cfg, err := Load(workspace, "")
@@ -24,6 +25,9 @@ func TestLoadUsesEnvOverrides(t *testing.T) {
 	}
 	if cfg.Provider.Type != "anthropic" {
 		t.Fatalf("expected anthropic provider, got %q", cfg.Provider.Type)
+	}
+	if !cfg.Provider.AutoDetectType {
+		t.Fatalf("expected auto detect provider type from env")
 	}
 	if cfg.Stream {
 		t.Fatalf("expected stream override to disable streaming")
@@ -180,5 +184,146 @@ func TestLoadRejectsMalformedConfigJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unexpected end of JSON input") && !strings.Contains(err.Error(), "invalid character") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRejectsVendorLikeProviderType(t *testing.T) {
+	workspace := t.TempDir()
+	configPath := filepath.Join(workspace, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "provider": {
+    "type": "deepseek",
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "api_key": "test-key"
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Load(workspace, "")
+	if err == nil {
+		t.Fatal("expected vendor-like provider type to be rejected")
+	}
+	if !strings.Contains(err.Error(), "provider.type must be one of") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadAutoDetectTypeInfersAnthropicFromAPIPath(t *testing.T) {
+	workspace := t.TempDir()
+	configPath := filepath.Join(workspace, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "provider": {
+    "type": "",
+    "auto_detect_type": true,
+    "base_url": "https://proxy.example.com",
+    "api_path": "v1/messages",
+    "model": "claude-sonnet",
+    "api_key": "test-key"
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(workspace, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider.Type != "anthropic" {
+		t.Fatalf("expected auto-detected anthropic provider, got %q", cfg.Provider.Type)
+	}
+}
+
+func TestLoadAutoDetectTypeInfersAnthropicFromHeaders(t *testing.T) {
+	workspace := t.TempDir()
+	configPath := filepath.Join(workspace, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "provider": {
+    "type": "",
+    "auto_detect_type": true,
+    "base_url": "https://gateway.example.com",
+    "model": "claude-sonnet",
+    "api_key": "test-key",
+    "extra_headers": {
+      "anthropic-version": "2023-06-01"
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(workspace, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider.Type != "anthropic" {
+		t.Fatalf("expected header-based auto-detected anthropic provider, got %q", cfg.Provider.Type)
+	}
+}
+
+func TestLoadAutoDetectTypeFallsBackToOpenAICompatible(t *testing.T) {
+	workspace := t.TempDir()
+	configPath := filepath.Join(workspace, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "provider": {
+    "type": "",
+    "auto_detect_type": true,
+    "base_url": "https://example.com",
+    "model": "gpt-test",
+    "api_key": "test-key"
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(workspace, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider.Type != "openai-compatible" {
+		t.Fatalf("expected fallback auto-detected openai-compatible provider, got %q", cfg.Provider.Type)
+	}
+}
+
+func TestLoadTrimsProviderCompatibilityOverrides(t *testing.T) {
+	workspace := t.TempDir()
+	configPath := filepath.Join(workspace, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{
+  "provider": {
+    "type": "openai-compatible",
+    "base_url": "https://example.com",
+    "api_path": "  /v1/chat/completions  ",
+    "model": "gpt-test",
+    "api_key": "test-key",
+    "auth_header": "  api-key  ",
+    "auth_scheme": "  ",
+    "extra_headers": {
+      "  x-client  ": "  bytemind  ",
+      "empty": "   "
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(workspace, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider.APIPath != "/v1/chat/completions" {
+		t.Fatalf("expected trimmed api_path, got %q", cfg.Provider.APIPath)
+	}
+	if cfg.Provider.AuthHeader != "api-key" {
+		t.Fatalf("expected trimmed auth_header, got %q", cfg.Provider.AuthHeader)
+	}
+	if cfg.Provider.AuthScheme != "" {
+		t.Fatalf("expected empty auth_scheme after trimming, got %q", cfg.Provider.AuthScheme)
+	}
+	if got := cfg.Provider.ExtraHeaders["x-client"]; got != "bytemind" {
+		t.Fatalf("expected trimmed extra header value, got %q", got)
+	}
+	if _, ok := cfg.Provider.ExtraHeaders["empty"]; ok {
+		t.Fatalf("expected empty extra header to be removed")
 	}
 }
