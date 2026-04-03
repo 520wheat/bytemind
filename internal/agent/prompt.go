@@ -60,21 +60,25 @@ func modePrompt(mode string) string {
 func loadAGENTSInstruction(workspace string) string {
 	workspace = strings.TrimSpace(workspace)
 	if workspace == "" {
+		promptDebugf("AGENTS skip: empty workspace")
 		return ""
 	}
 	path := filepath.Join(workspace, "AGENTS.md")
 	content, err := os.ReadFile(path)
 	if err != nil {
+		promptDebugf("AGENTS skip: failed to read %s: %v", path, err)
 		return ""
 	}
 	text := strings.TrimSpace(string(content))
 	if text == "" {
+		promptDebugf("AGENTS skip: file is empty: %s", path)
 		return ""
 	}
 	absPath, err := filepath.Abs(path)
 	if err == nil {
 		path = absPath
 	}
+	promptDebugf("AGENTS loaded: %s", path)
 	return "Instructions from: " + path + "\n" + text
 }
 
@@ -202,4 +206,16 @@ func filterPromptParts(parts []string) []string {
 		}
 	}
 	return filtered
+}
+
+func promptDebugEnabled() bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv("BYTEMIND_DEBUG_PROMPT")))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func promptDebugf(format string, args ...any) {
+	if !promptDebugEnabled() {
+		return
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "[bytemind][prompt] "+format+"\n", args...)
 }

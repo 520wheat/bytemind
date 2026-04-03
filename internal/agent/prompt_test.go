@@ -95,6 +95,22 @@ func TestLoadAGENTSInstructionReturnsEmptyWhenMissing(t *testing.T) {
 	}
 }
 
+func TestLoadAGENTSInstructionReturnsEmptyWhenWorkspaceBlank(t *testing.T) {
+	if got := loadAGENTSInstruction("   "); got != "" {
+		t.Fatalf("expected empty instruction text, got %q", got)
+	}
+}
+
+func TestLoadAGENTSInstructionReturnsEmptyWhenReadFails(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, "AGENTS.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadAGENTSInstruction(workspace); got != "" {
+		t.Fatalf("expected empty instruction text, got %q", got)
+	}
+}
+
 func TestFormatToolsDeduplicatesAndSorts(t *testing.T) {
 	got := formatTools([]string{"read_file", "list_files", "read_file"})
 	want := "- list_files\n- read_file"
@@ -125,6 +141,21 @@ func TestIsGitRepository(t *testing.T) {
 	}
 	if !isGitRepository(workspace) {
 		t.Fatalf("expected workspace with .git to be true")
+	}
+}
+
+func TestPromptDebugEnabled(t *testing.T) {
+	for _, value := range []string{"1", "true", "yes", "on", "TRUE"} {
+		t.Setenv("BYTEMIND_DEBUG_PROMPT", value)
+		if !promptDebugEnabled() {
+			t.Fatalf("expected debug enabled for value %q", value)
+		}
+	}
+	for _, value := range []string{"", "0", "false", "off", "no"} {
+		t.Setenv("BYTEMIND_DEBUG_PROMPT", value)
+		if promptDebugEnabled() {
+			t.Fatalf("expected debug disabled for value %q", value)
+		}
 	}
 }
 
