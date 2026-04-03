@@ -23,7 +23,7 @@ Repository-level instructions for ByteMind agents working in this workspace.
 ## Prompt Architecture Expectations
 
 - System prompt should be assembled in this order:
-  1. `internal/agent/prompts/main.md`
+  1. `internal/agent/prompts/system_prompt.md`
   2. `internal/agent/prompts/mode/{build|plan}.md`
   3. runtime context block
   4. this `AGENTS.md` instruction block

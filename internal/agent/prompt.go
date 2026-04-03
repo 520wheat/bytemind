@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-//go:embed prompts/main.md
+//go:embed prompts/system_prompt.md
 var mainPromptSource string
 
 //go:embed prompts/mode/build.md

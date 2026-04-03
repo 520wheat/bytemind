@@ -13,7 +13,7 @@ Keep prompt assembly simple, testable, and close to OpenCode's runtime layering 
 
 Prompt assets live under `internal/agent/prompts/`:
 
-- `main.md`
+- `system_prompt.md`
 - `mode/build.md`
 - `mode/plan.md`
 
@@ -21,7 +21,7 @@ Prompt assets live under `internal/agent/prompts/`:
 
 `internal/agent/prompt.go` assembles the final system prompt in fixed order:
 
-1. `main.md`
+1. `system_prompt.md`
 2. `mode/{build|plan}.md`
 3. `renderSystemBlock(...)`
 4. `renderInstructionBlock(...)`
