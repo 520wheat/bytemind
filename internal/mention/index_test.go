@@ -19,8 +19,9 @@ func TestWorkspaceFileIndexNilSafety(t *testing.T) {
 }
 
 func TestNewStaticWorkspaceFileIndexNormalizesCandidates(t *testing.T) {
+	osPath := filepath.Join("internal", "tui", "model.go")
 	idx := NewStaticWorkspaceFileIndex([]Candidate{
-		{Path: " internal\\tui\\model.go "},
+		{Path: " " + osPath + " "},
 		{Path: ""},
 		{Path: "README.md", BaseName: "README.md", TypeTag: "md"},
 	}, 0, true)
